@@ -34,8 +34,17 @@ export class TouchControls {
     this.safe = { l: 0, r: 0, t: 0, b: 0 };
     this.scale = 1;
     // Pixels of drag -> units fed to Input.mouse, which the game then scales by
-    // Input.sensitivity. 2.8 lands at roughly 0.35 deg/px at the default slider.
-    this.lookGain = 2.8;
+    // Input.sensitivity. 3.6 lands at ~0.54 deg/px unaccelerated, ~1.13 deg/px
+    // on a full-speed flick, so a 180 is about 160px of thumb travel.
+    this.lookGain = 3.6;
+    // Flick acceleration. A slow drag stays 1:1 for precise aiming; a fast
+    // swipe scales up to `lookAccel`, so a 180 is one thumb motion instead of
+    // three. This is what makes a touch camera feel quick without making it
+    // twitchy at low speeds.
+    this.lookAccel = 2.1;
+    this.accelStart = 260;    // px/s where acceleration begins
+    this.accelFull = 2100;    // px/s where it is fully applied
+    this._lookX = 0; this._lookY = 0;
 
     this.buttons = BTN.map(([id, key, label, glyph, drag, size]) =>
       ({ id, key, label, glyph, drag, size, x: 0, y: 0, r: 0, down: false, ptr: -1 }));
@@ -62,7 +71,9 @@ export class TouchControls {
   layout(w, h, safe) {
     this.w = w; this.h = h;
     if (safe) this.safe = safe;
-    const s = clamp(Math.min(w, h) / 430, 0.70, 1.20);
+    // Buttons are sized for a thumb, not for the screen: a tablet gets slightly
+    // larger controls, not proportionally larger ones.
+    const s = clamp(Math.min(w, h) / 430, 0.80, 1.28);
     this.scale = s;
     this.stick.max = 72 * s;
 
@@ -83,8 +94,16 @@ export class TouchControls {
     P('strike', rx - 96 * s, T + 38 * s);
     P('uav', rx - 150 * s, T + 38 * s);
 
-    // The stick owns the lower-left quadrant; look owns everything else.
-    this.stickZone = { x0: L, x1: L + (w - L - R) * 0.46, y0: T + (h - T - B) * 0.30, y1: by };
+    // The stick owns the lower-left corner; look owns everything else. On a
+    // wide tablet a flat 46% would put the zone edge far past thumb reach, so
+    // it is capped in absolute terms too.
+    const usableW = w - L - R, usableH = h - T - B;
+    this.stickZone = {
+      x0: L,
+      x1: L + Math.min(usableW * 0.46, 470 * s),
+      y0: T + usableH * (usableH > 620 ? 0.42 : 0.30),
+      y1: by,
+    };
   }
 
   _local(e) {
@@ -153,8 +172,9 @@ export class TouchControls {
         this.stick.oy = y - (dy / d) * this.stick.max;
       }
     } else if (p.role === 'look') {
-      this.input.mouse.dx += (x - p.lx) * this.lookGain;
-      this.input.mouse.dy += (y - p.ly) * this.lookGain;
+      // Buffered, not applied here: acceleration needs a per-frame dt.
+      this._lookX += x - p.lx;
+      this._lookY += y - p.ly;
     }
     p.lx = x; p.ly = y;
   }
@@ -188,9 +208,22 @@ export class TouchControls {
     else I.keys.delete('ShiftLeft');
   }
 
-  /** Writes the analog stick into the shared input axis, and auto-sprints. */
+  /** Writes look + stick into the shared input state, and auto-sprints. */
   update(dt) {
-    if (!this.enabled) return;
+    if (!this.enabled) { this._lookX = 0; this._lookY = 0; return; }
+
+    // ---- look, with flick acceleration
+    const rx = this._lookX, ry = this._lookY;
+    this._lookX = 0; this._lookY = 0;
+    if (rx || ry) {
+      const pxPerSec = Math.hypot(rx, ry) / Math.max(dt, 1 / 240);
+      const t = clamp((pxPerSec - this.accelStart) / (this.accelFull - this.accelStart), 0, 1);
+      const boost = 1 + (t * t * (3 - 2 * t)) * (this.lookAccel - 1);
+      const g = this.lookGain * boost;
+      this.input.mouse.dx += rx * g;
+      this.input.mouse.dy += ry * g;
+    }
+
     const st = this.stick;
     if (!st.active) {
       this.input.axis.x = 0; this.input.axis.y = 0;

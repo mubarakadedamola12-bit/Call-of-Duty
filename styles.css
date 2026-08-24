@@ -118,6 +118,7 @@ select option{background:#0c1218;color:#cfdae6}
 
 .touchonly{display:none}
 body.touch .touchonly{display:block}
+body.touch label.touchonly.row{display:flex}
 body.touch .keys li:nth-child(2){display:none}   /* arrow-key row is keyboard-only */
 body.touch .desktoponly{display:none}
 

@@ -34,9 +34,11 @@ const defaultQuality = IS_MOBILE ? 'low' : 'high';
 const defaultScale = IS_MOBILE ? 0.65 : 1;
 
 const settings = {
-  scale: defaultScale, fov: IS_MOBILE ? 85 : 80, grain: 0.38, sens: 1, vol: 0.55,
+  scale: defaultScale, fov: IS_MOBILE ? 85 : 80, grain: 0.38, vol: 0.55,
   primary: 'kilo', quality: defaultQuality,
-  touchSens: 1, aimAssist: IS_TOUCH ? 0.85 : 0,
+  sens: 1.0,
+  lookAccel: 2.1,
+  aimAssist: IS_TOUCH ? 0.85 : 0,
 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ob_settings') || '{}')); } catch { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('ob_settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -57,9 +59,16 @@ function readSafeInsets() {
 
 function checkOrientation() {
   if (!IS_MOBILE) return true;
-  const portrait = window.innerHeight > window.innerWidth;
-  $('rotate').classList.toggle('hidden', !portrait);
-  return !portrait;
+  const vv = window.visualViewport;
+  const w = vv ? vv.width : window.innerWidth;
+  const h = vv ? vv.height : window.innerHeight;
+  // A tablet has room to play either way up; a phone in portrait does not, so
+  // nudge it sideways rather than shipping an unplayable layout.
+  const isPhone = Math.min(w, h) < 500;
+  const block = isPhone && h > w;
+  const el = $('rotate');
+  if (el) el.classList.toggle('hidden', !block);
+  return !block;
 }
 
 /* -------------------------------------------------------------- lifecycle */
@@ -155,7 +164,11 @@ function resize() {
   checkOrientation();
 }
 addEventListener('resize', () => { if (renderer) resize(); });
-addEventListener('orientationchange', () => setTimeout(() => { if (renderer) resize(); }, 220));
+// iOS hands back stale viewport dimensions for a beat after a rotation, so
+// re-measure a few times instead of trusting the first number.
+addEventListener('orientationchange', () => {
+  for (const d of [60, 220, 500, 900]) setTimeout(() => { if (renderer) resize(); }, d);
+});
 if (window.visualViewport) visualViewport.addEventListener('resize', () => { if (renderer) resize(); });
 
 /* --------------------------------------------------------------- settings */
@@ -173,7 +186,8 @@ function applySettings() {
   $('optVolV').textContent = (settings.vol * 100 | 0);
 
   renderer.grain = settings.grain * 0.10;
-  input.sensitivity = 0.0022 * (IS_TOUCH ? settings.touchSens : settings.sens);
+  input.sensitivity = Input.BASE_SENSITIVITY * settings.sens;
+  if (touch) touch.lookAccel = settings.lookAccel;
   audio.setMasterVolume(settings.vol);
   if (game) { game.fovBase = settings.fov; game.aimAssist = settings.aimAssist; }
 
@@ -187,6 +201,12 @@ function applySettings() {
     as.value = Math.round(settings.aimAssist * 100);
     $('optAssistV').textContent = settings.aimAssist > 0
       ? Math.round(settings.aimAssist * 100) + '%' : 'OFF';
+  }
+  const la = $('optAccel');
+  if (la) {
+    la.value = Math.round(settings.lookAccel * 100);
+    $('optAccelV').textContent = settings.lookAccel <= 1.02
+      ? 'OFF' : settings.lookAccel.toFixed(1) + '×';
   }
 }
 
@@ -204,7 +224,9 @@ function initUI() {
   bindSlider('optScale', 'scale', (v) => (v * 100 | 0) + '%', (v) => { const s = v / 100; settings.scale = s; resize(); return s; });
   bindSlider('optFov', 'fov', (v) => String(v | 0), (v) => { if (game) game.fovBase = v; return v; });
   bindSlider('optGrain', 'grain', (v) => String(v * 100 | 0), (v) => { const g = v / 100; renderer.grain = g * 0.10; return g; });
-  bindSlider('optSens', 'sens', (v) => v.toFixed(2), (v) => { const s = v / 100; input.sensitivity = 0.0022 * s; return s; });
+  bindSlider('optSens', 'sens', (v) => v.toFixed(2), (v) => {
+    const s = v / 100; input.sensitivity = Input.BASE_SENSITIVITY * s; return s;
+  });
   bindSlider('optVol', 'vol', (v) => String(v * 100 | 0), (v) => { const a = v / 100; audio.setMasterVolume(a); return a; });
 
   const qs = $('optQuality');
@@ -212,6 +234,14 @@ function initUI() {
     settings.quality = qs.value;
     $('optQualityV').textContent = settings.quality.toUpperCase();
     renderer.setQuality(settings.quality);
+    saveSettings();
+  });
+  const la = $('optAccel');
+  if (la) la.addEventListener('input', () => {
+    settings.lookAccel = parseFloat(la.value) / 100;
+    $('optAccelV').textContent = settings.lookAccel <= 1.02
+      ? 'OFF' : settings.lookAccel.toFixed(1) + '×';
+    if (touch) touch.lookAccel = settings.lookAccel;
     saveSettings();
   });
   const as = $('optAssist');

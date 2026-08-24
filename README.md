@@ -57,7 +57,7 @@ Sources: [Modern Warfare 4 multiplayer systems](https://www.callofduty.com/blog/
 |---|---|
 | Left half | Floating stick — drag to move, analog, so a half-push walks |
 | Push the stick fully forward | Sprint · flick it forward twice for tactical sprint |
-| Right half | Drag to look |
+| Right half | Drag to look — flick fast to turn fast (see below) |
 | **FIRE** | Hold to shoot — **keep sliding your thumb off it to aim while firing** |
 | **ADS** | Aim down sights (also draggable) |
 | **CROUCH** | Tap to toggle · tap while sprinting to slide |
@@ -66,10 +66,29 @@ Sources: [Modern Warfare 4 multiplayer systems](https://www.callofduty.com/blog/
 | **▲ / ✈** | UAV / Airstrike |
 | **⏸** | Pause |
 
-The game gates itself behind a rotate-to-landscape screen, requests fullscreen
-and a landscape orientation lock on deploy (both best-effort — iPhone Safari
-grants neither), and lays the HUD out inside `env(safe-area-inset-*)` so nothing
+**Phones** are gated behind a rotate-to-landscape screen, since a portrait phone
+has nowhere to put the controls. **Tablets play either way up** — an iPad has
+room for the full layout in portrait as well as landscape. Deploy requests
+fullscreen and a landscape orientation lock (both best-effort — iPhone Safari
+grants neither), and the HUD lays out inside `env(safe-area-inset-*)` so nothing
 hides under a notch or the home indicator.
+
+Control sizes are tuned for a thumb, not for the screen: an iPad gets slightly
+larger buttons, not proportionally larger ones, and the movement zone is capped
+in absolute width so its edge never lands past thumb reach on a big display.
+
+### Look speed
+
+Touch look has **flick acceleration** — a slow drag stays 1:1 for tracking, and
+a fast swipe scales up, so a 180 is one thumb motion rather than three:
+
+| drag speed | turn rate | thumb travel for a 180 |
+|---|---|---|
+| slow (tracking) | 0.54°/px | 336 px |
+| fast (flick) | 1.13°/px | 160 px |
+
+Both the sensitivity and the acceleration amount are sliders on the briefing
+screen; acceleration can be turned off entirely.
 
 ### Keyboard + mouse
 
@@ -203,9 +222,12 @@ Mobile also starts at a 0.65 resolution scale and a wider 85° FOV.
 
 ## Settings
 
-Quality, resolution scale, FOV, film grain, sensitivity, aim assist and volume
-live on the briefing screen and persist to `localStorage`. Drop the resolution
-scale first if you need more frames.
+Quality, resolution scale, FOV, film grain, sensitivity, look acceleration
+(touch only), aim assist and volume live on the briefing screen and persist to
+`localStorage`. Drop the resolution scale first if you need more frames.
+
+Sensitivity drives both input paths from one slider and one base constant
+(`Input.BASE_SENSITIVITY`), spanning 0.20×–4.50×.
 
 ## Layout note
 

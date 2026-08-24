@@ -1,6 +1,8 @@
 // Pointer-lock mouse look + keyboard state.
 
 export class Input {
+  static BASE_SENSITIVITY = 0.0026;
+
   constructor(canvas) {
     this.canvas = canvas;
     this.keys = new Set();
@@ -14,7 +16,9 @@ export class Input {
     this.buttons = [false, false, false];
     this.btnPressed = [false, false, false];
     this.locked = false;
-    this.sensitivity = 0.0022;
+    // Radians per mouse count (and per gain-scaled touch pixel). Single source
+    // of truth — main.js scales this by the sensitivity setting.
+    this.sensitivity = Input.BASE_SENSITIVITY;
     this.invertY = false;
     this.onLockChange = null;
 
