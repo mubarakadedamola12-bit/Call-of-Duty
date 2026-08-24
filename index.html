@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>OPERATION BLACKOUT — Scrapyard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <canvas id="hud"></canvas>
+
+  <div id="vhs"></div>
+
+  <!-- ---------------------------------------------------------- LOADING -->
+  <section id="loading" class="screen">
+    <div class="brand">
+      <div class="tag">TACTICAL FPS</div>
+      <h1>OPERATION<span>BLACKOUT</span></h1>
+      <div class="sub">MAP&nbsp;·&nbsp;SCRAPYARD &nbsp;&nbsp;|&nbsp;&nbsp; TEAM DEATHMATCH</div>
+    </div>
+    <div class="bar"><i id="loadbar"></i></div>
+    <div class="loadmsg" id="loadmsg">INITIALISING RENDERER…</div>
+  </section>
+
+  <!-- ------------------------------------------------------------- MENU -->
+  <section id="menu" class="screen hidden">
+    <div class="brand small">
+      <div class="tag">TACTICAL FPS</div>
+      <h1>OPERATION<span>BLACKOUT</span></h1>
+    </div>
+
+    <div class="panel">
+      <button id="deploy" class="primary">DEPLOY</button>
+      <div class="hint">Click to lock the mouse · <kbd>Esc</kbd> releases it</div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <h3>CONTROLS</h3>
+        <ul class="keys">
+          <li><kbd>W A S D</kbd><span>Move</span></li>
+          <li><kbd>↑ ← ↓ →</kbd><span>Move (same as WASD)</span></li>
+          <li><kbd>Shift</kbd><span>Sprint · double-tap for tac-sprint</span></li>
+          <li><kbd>Ctrl</kbd>/<kbd>C</kbd><span>Crouch — tap to toggle, hold to stay down</span></li>
+          <li><kbd>Shift</kbd>+<kbd>C</kbd><span>Slide · jump out of it to keep the speed</span></li>
+          <li><kbd>Space</kbd><span>Jump · into a ledge to mantle up</span></li>
+          <li><kbd>LMB</kbd><span>Fire</span></li>
+          <li><kbd>RMB</kbd><span>Aim down sights</span></li>
+          <li><kbd>R</kbd><span>Reload</span></li>
+          <li><kbd>1</kbd><kbd>2</kbd>/<kbd>Q</kbd><span>Swap weapon</span></li>
+          <li><kbd>G</kbd><span>Frag grenade</span></li>
+          <li><kbd>F</kbd><span>Inspect weapon</span></li>
+          <li><kbd>4</kbd><kbd>5</kbd><span>Killstreaks (UAV · Airstrike)</span></li>
+          <li><kbd>Esc</kbd><span>Pause</span></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>LOADOUT</h3>
+        <div class="loadout" id="loadout"></div>
+        <h3 class="mt">GRAPHICS</h3>
+        <label class="row"><span>Resolution scale</span>
+          <input id="optScale" type="range" min="50" max="100" step="5" value="100"><b id="optScaleV">100%</b></label>
+        <label class="row"><span>Field of view</span>
+          <input id="optFov" type="range" min="65" max="110" step="1" value="80"><b id="optFovV">80</b></label>
+        <label class="row"><span>Film grain</span>
+          <input id="optGrain" type="range" min="0" max="100" step="5" value="38"><b id="optGrainV">38</b></label>
+        <label class="row"><span>Sensitivity</span>
+          <input id="optSens" type="range" min="20" max="300" step="5" value="100"><b id="optSensV">1.00</b></label>
+        <label class="row"><span>Volume</span>
+          <input id="optVol" type="range" min="0" max="100" step="5" value="55"><b id="optVolV">55</b></label>
+      </div>
+    </div>
+    <div class="foot" id="gpuinfo"></div>
+  </section>
+
+  <!-- ------------------------------------------------------------ PAUSE -->
+  <section id="pause" class="screen hidden dim">
+    <h2>PAUSED</h2>
+    <div class="panel">
+      <button id="resume" class="primary">RESUME</button>
+      <button id="restart">RESTART MATCH</button>
+      <button id="tomenu">BRIEFING</button>
+    </div>
+    <div class="stats" id="pausestats"></div>
+  </section>
+
+  <div id="fps"></div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

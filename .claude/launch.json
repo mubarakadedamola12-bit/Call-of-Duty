@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "operation-blackout",
+      "autoPort": true,
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-u", ".claude/serve.py"],
+      "port": 8124
+    }
+  ]
+}
