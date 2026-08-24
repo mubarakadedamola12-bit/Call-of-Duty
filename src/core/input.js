@@ -7,6 +7,10 @@ export class Input {
     this.pressed = new Set();     // edge-triggered, cleared each frame
     this.released = new Set();
     this.mouse = { dx: 0, dy: 0, wheel: 0 };
+    // Analog movement axis, written by the touch stick (or a gamepad). The
+    // keyboard adds into this, so both can drive the player at once.
+    this.axis = { x: 0, y: 0 };
+    this.touchMode = false;
     this.buttons = [false, false, false];
     this.btnPressed = [false, false, false];
     this.locked = false;
@@ -52,9 +56,17 @@ export class Input {
   }
 
   requestLock() {
-    const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
-    if (p && p.catch) p.catch(() => this.canvas.requestPointerLock());
+    if (this.touchMode) return;   // touch drives look directly
+    try {
+      const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
+      if (p && p.catch) p.catch(() => { try { this.canvas.requestPointerLock(); } catch { /* ignore */ } });
+    } catch {
+      try { this.canvas.requestPointerLock(); } catch { /* ignore */ }
+    }
   }
+
+  /** True when the player can actually act: pointer-locked, or on touch. */
+  get active() { return this.locked || this.touchMode; }
 
   down(code) { return this.keys.has(code); }
   hit(code) { return this.pressed.has(code); }

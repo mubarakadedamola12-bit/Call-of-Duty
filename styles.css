@@ -93,3 +93,63 @@ h2{font-size:34px;letter-spacing:.36em;font-weight:700;color:#e8f0f8;text-indent
 
 #fps{position:absolute;top:6px;right:10px;z-index:9;font-size:11px;letter-spacing:.12em;
   color:rgba(160,180,200,.45);pointer-events:none;font-variant-numeric:tabular-nums}
+
+
+/* ============================================================ mobile / touch */
+
+#safeprobe{position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;
+  padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);
+  padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left)}
+
+html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%}
+body.touch{position:fixed;inset:0;touch-action:none;-webkit-tap-highlight-color:transparent;
+  -webkit-touch-callout:none}
+body.touch #gl,body.touch #hud{touch-action:none}
+/* The HUD canvas receives the touches, so it must not be click-through. */
+body.touch #hud{pointer-events:auto}
+body.touch #gl{cursor:default}
+
+#stage{height:100vh;height:100dvh}
+
+select{font-family:inherit;font-size:12px;letter-spacing:.12em;color:#cfdae6;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);
+  padding:4px 8px;flex:1;outline:none}
+select option{background:#0c1218;color:#cfdae6}
+
+.touchonly{display:none}
+body.touch .touchonly{display:block}
+body.touch .keys li:nth-child(2){display:none}   /* arrow-key row is keyboard-only */
+body.touch .desktoponly{display:none}
+
+/* Rotate-to-landscape gate */
+#rotate{z-index:40;gap:14px}
+.rotico{font-size:64px;color:#ffc233;animation:spin 2.4s ease-in-out infinite}
+@keyframes spin{0%,100%{transform:rotate(0)}50%{transform:rotate(90deg)}}
+#rotate p{max-width:70vw;text-align:center}
+
+@media (max-width:900px), (pointer:coarse){
+  .screen{gap:16px;padding:calc(12px + env(safe-area-inset-top)) 14px
+    calc(12px + env(safe-area-inset-bottom));overflow-y:auto;justify-content:flex-start}
+  .brand{margin-top:4px}
+  .brand h1{font-size:clamp(30px,8vw,54px)}
+  .brand .tag{font-size:10px;letter-spacing:.42em;margin-bottom:8px}
+  .brand .sub{font-size:11px;letter-spacing:.18em;margin-top:8px}
+  button.primary{font-size:17px;padding:15px 52px}
+  .cols{gap:12px;max-width:100%;width:100%}
+  .card{flex:1 1 100%;min-width:0;padding:14px}
+  .keys{font-size:12px;gap:5px}
+  .keys li span{font-size:11px}
+  .row span{min-width:96px;font-size:12px}
+  .foot{display:none}
+  #fps{top:calc(2px + env(safe-area-inset-top));font-size:10px}
+}
+
+/* Landscape phones are short — keep the briefing scrollable and compact. */
+@media (max-height:520px) and (orientation:landscape){
+  .screen{gap:10px}
+  .brand h1{font-size:30px}
+  .brand .sub{display:none}
+  .cols{gap:10px}
+  .card{flex:1 1 45%}
+  button.primary{padding:11px 40px;font-size:15px}
+}

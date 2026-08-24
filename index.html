@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#05070a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Blackout">
 <title>OPERATION BLACKOUT — Scrapyard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,6 +16,7 @@
 </head>
 <body>
 <div id="stage">
+  <div id="safeprobe"></div>
   <canvas id="gl"></canvas>
   <canvas id="hud"></canvas>
 
@@ -36,7 +42,8 @@
 
     <div class="panel">
       <button id="deploy" class="primary">DEPLOY</button>
-      <div class="hint">Click to lock the mouse · <kbd>Esc</kbd> releases it</div>
+      <div class="hint desktoponly">Click to lock the mouse · <kbd>Esc</kbd> releases it</div>
+      <div class="hint touchonly">Tap to drop in · rotate to landscape for the best view</div>
     </div>
 
     <div class="cols">
@@ -58,14 +65,30 @@
           <li><kbd>4</kbd><kbd>5</kbd><span>Killstreaks (UAV · Airstrike)</span></li>
           <li><kbd>Esc</kbd><span>Pause</span></li>
         </ul>
+        <div class="touchonly">
+          <h3 class="mt">TOUCH</h3>
+          <ul class="keys">
+            <li><kbd>Left</kbd><span>Drag anywhere to move · push forward to sprint</span></li>
+            <li><kbd>Right</kbd><span>Drag to look</span></li>
+            <li><kbd>FIRE</kbd><span>Hold and slide to keep aiming while shooting</span></li>
+            <li><kbd>ADS</kbd><span>Aim down sights</span></li>
+            <li><kbd>CROUCH</kbd><span>Tap while sprinting to slide</span></li>
+          </ul>
+        </div>
       </div>
 
       <div class="card">
         <h3>LOADOUT</h3>
         <div class="loadout" id="loadout"></div>
         <h3 class="mt">GRAPHICS</h3>
+        <label class="row"><span>Quality</span>
+          <select id="optQuality">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select><b id="optQualityV">HIGH</b></label>
         <label class="row"><span>Resolution scale</span>
-          <input id="optScale" type="range" min="50" max="100" step="5" value="100"><b id="optScaleV">100%</b></label>
+          <input id="optScale" type="range" min="40" max="100" step="5" value="100"><b id="optScaleV">100%</b></label>
         <label class="row"><span>Field of view</span>
           <input id="optFov" type="range" min="65" max="110" step="1" value="80"><b id="optFovV">80</b></label>
         <label class="row"><span>Film grain</span>
@@ -74,6 +97,8 @@
           <input id="optSens" type="range" min="20" max="300" step="5" value="100"><b id="optSensV">1.00</b></label>
         <label class="row"><span>Volume</span>
           <input id="optVol" type="range" min="0" max="100" step="5" value="55"><b id="optVolV">55</b></label>
+        <label class="row"><span>Aim assist</span>
+          <input id="optAssist" type="range" min="0" max="100" step="5" value="0"><b id="optAssistV">OFF</b></label>
       </div>
     </div>
     <div class="foot" id="gpuinfo"></div>
@@ -88,6 +113,13 @@
       <button id="tomenu">BRIEFING</button>
     </div>
     <div class="stats" id="pausestats"></div>
+  </section>
+
+  <!-- ---------------------------------------------------- ROTATE (mobile) -->
+  <section id="rotate" class="screen hidden">
+    <div class="rotico">⟳</div>
+    <h2>ROTATE</h2>
+    <p class="hint">Turn your device sideways to deploy.</p>
   </section>
 
   <div id="fps"></div>
