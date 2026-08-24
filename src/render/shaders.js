@@ -235,6 +235,7 @@ uniform sampler2D uNoise;
 uniform mat4 uProj, uInvProj, uView;
 uniform vec2 uRes;
 uniform float uRadius, uBias, uIntensity;
+uniform int uSamples;      // lowered on weaker GPUs
 uniform float uFrame;
 out vec4 oCol;
 
@@ -257,11 +258,13 @@ void main(){
 
   float occ = 0.0;
   const int K = 16;
+  int NS = uSamples < 1 ? 1 : (uSamples > K ? K : uSamples);
   for (int i = 0; i < K; i++){
+    if (i >= NS) break;
     // Cosine-ish hemisphere spiral, radius grows with sample index.
     float fi = float(i) + 0.5;
     float a = fi * 2.39996323 + rot;
-    float r = sqrt(fi / float(K));
+    float r = sqrt(fi / float(NS));
     vec3 s = vec3(cos(a) * r, sin(a) * r, 0.0);
     s.z = sqrt(max(0.05, 1.0 - r * r));
     // Orient into the hemisphere around N.
@@ -283,7 +286,7 @@ void main(){
     float rangeCheck = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sampleP.z), 1e-4));
     occ += (dz >= uBias ? 1.0 : 0.0) * rangeCheck;
   }
-  float ao = 1.0 - (occ / float(K)) * uIntensity;
+  float ao = 1.0 - (occ / float(NS)) * uIntensity;
   oCol = vec4(sat(ao), 0.0, 0.0, 1.0);
 }`;
 

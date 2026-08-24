@@ -98,6 +98,12 @@ export class Game {
     this.crouchHold = 0;
     this.mantle = null;
     this.moveInput = false;
+    // Aim assist. 0 disables it entirely (the desktop default); touch turns it
+    // on, because a thumb cannot track a strafing target the way a mouse can.
+    this.aimAssist = 0;
+    this.assistSlow = 1;
+    this.assistTarget = null;
+    this.touch = null;
 
     this.loadout = ['kilo', 'pistol'];
     this.slot = 0;
@@ -131,9 +137,12 @@ export class Game {
     this.matchOver = false;
     this.spawnProtect = 0;
 
+    // Squad size scales with the render tier — mobile runs fewer actors.
+    const total = clamp(renderer.q ? renderer.q.bots : 9, 4, 12);
+    const allies = Math.floor(total / 2);
     this.bots = [];
-    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this.world, 0, 0.72 + i * 0.05));
-    for (let i = 0; i < 5; i++) this.bots.push(new Bot(this.world, 1, 0.80 + i * 0.05));
+    for (let i = 0; i < allies; i++) this.bots.push(new Bot(this.world, 0, 0.72 + i * 0.05));
+    for (let i = 0; i < total - allies; i++) this.bots.push(new Bot(this.world, 1, 0.80 + i * 0.05));
 
     this.time = 0;
     this.camWorld = m4();
@@ -250,6 +259,64 @@ export class Game {
     cw[8] = -f[0]; cw[9] = -f[1]; cw[10] = -f[2]; cw[11] = 0;
     cw[12] = eye[0]; cw[13] = eye[1]; cw[14] = eye[2]; cw[15] = 1;
     return { eye, dir: f, right: [rx, ry, rz] };
+  }
+
+  /**
+   * Two-part aim assist, the way console shooters do it:
+   *  - *slowdown* scales look sensitivity down while the reticle is on a target,
+   *    so it is easy to stop on them;
+   *  - *magnetism* nudges the view toward the target while firing or aiming.
+   * Both are proportional to how centred the target already is, so it never
+   * takes the shot for you — it only makes a thumb competitive with a mouse.
+   */
+  updateAimAssist(dt) {
+    if (this.aimAssist <= 0) { this.assistSlow = 1; this.assistTarget = null; return; }
+    const p = this.player;
+    const cp = Math.cos(p.pitch + this.recoilPitch), sp = Math.sin(p.pitch + this.recoilPitch);
+    const yw = p.yaw + this.recoilYaw;
+    const dirX = -Math.sin(yw) * cp, dirY = sp, dirZ = -Math.cos(yw) * cp;
+    const ex = p.pos[0], ey = p.pos[1] + lerp(EYE_STAND, EYE_CROUCH, p.crouchAmt), ez = p.pos[2];
+
+    const cone = Math.cos(0.115);           // ~6.6 degrees
+    let best = null, bestDot = cone;
+    for (const b of this.bots) {
+      if (b.dead || b.team === p.team) continue;
+      const tx = b.pos[0], ty = b.pos[1] + 1.22 - b.crouchAmt * 0.4, tz = b.pos[2];
+      const dx = tx - ex, dy = ty - ey, dz = tz - ez;
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 0.6 || d > 60) continue;
+      const dot = (dx * dirX + dy * dirY + dz * dirZ) / d;
+      if (dot <= bestDot) continue;
+      if (!this.world.visible([ex, ey, ez], [tx, ty, tz])) continue;
+      bestDot = dot; best = { b, tx, ty, tz, d };
+    }
+    this.assistTarget = best;
+
+    if (!best) {
+      this.assistSlow = damp(this.assistSlow, 1, 9, dt);
+      return;
+    }
+    // How centred: 0 at the edge of the cone, 1 dead on.
+    const centred = clamp((bestDot - cone) / (1 - cone), 0, 1);
+    const slowMin = lerp(1, 0.40, this.aimAssist);
+    this.assistSlow = damp(this.assistSlow, lerp(1, slowMin, Math.sqrt(centred)), 9, dt);
+
+    // Magnetism only when the player is actually committing to the shot.
+    const firing = this.input.buttons[0] ? 1 : 0;
+    const engage = clamp(firing * 0.85 + this.adsAmt * 0.60, 0, 1);
+    if (engage <= 0.01) return;
+
+    const wantYaw = Math.atan2(-(best.tx - ex), -(best.tz - ez));
+    let dyaw = wantYaw - p.yaw;
+    while (dyaw > Math.PI) dyaw -= TAU;
+    while (dyaw < -Math.PI) dyaw += TAU;
+    const horiz = Math.hypot(best.tx - ex, best.tz - ez);
+    let dpitch = Math.atan2(best.ty - ey, horiz) - p.pitch;
+
+    const rate = 6.0 * this.aimAssist * engage * (0.35 + centred * 0.65);
+    const k = 1 - Math.exp(-rate * dt);
+    p.yaw += clamp(dyaw, -0.5, 0.5) * k;
+    p.pitch = clamp(p.pitch + clamp(dpitch, -0.5, 0.5) * k, -1.50, 1.50);
   }
 
   /* ------------------------------------------------------------ ballistics */
@@ -419,14 +486,17 @@ export class Game {
     const inp = this.input, p = this.player;
 
     // --- look
-    if (inp.locked && !p.dead) {
-      const sens = inp.sensitivity * (this.adsAmt > 0.5 ? lerp(1, this.weapon.adsFov, 0.85) : 1);
+    if (inp.active && !p.dead) {
+      const zoom = this.adsAmt > 0.5 ? lerp(1, this.weapon.adsFov, 0.85) : 1;
+      // Aim-assist "slowdown": the reticle drags as it crosses a target.
+      const sens = inp.sensitivity * zoom * this.assistSlow;
       p.yaw -= inp.mouse.dx * sens;
       p.pitch -= inp.mouse.dy * sens * (inp.invertY ? -1 : 1);
       p.pitch = clamp(p.pitch, -1.50, 1.50);
       p.yaw = ((p.yaw + Math.PI) % TAU + TAU) % TAU - Math.PI;
     }
     this.lookDX = inp.mouse.dx; this.lookDY = inp.mouse.dy;
+    if (!p.dead) this.updateAimAssist(dt);
 
     // Recoil recovers toward zero; countering with the mouse just works.
     const rec = this.weapon.recoil;
@@ -453,15 +523,21 @@ export class Game {
     if (held('KeyS', 'ArrowDown')) iz -= 1;
     if (held('KeyA', 'ArrowLeft')) ix -= 1;
     if (held('KeyD', 'ArrowRight')) ix += 1;
-    const il = Math.hypot(ix, iz);
-    if (il > 0) { ix /= il; iz /= il; }   // no diagonal speed bonus
-    const hasInput = il > 0;
+    // Analog stick (touch) adds in, so partial deflection walks.
+    ix += inp.axis.x; iz += inp.axis.y;
+    let il = Math.hypot(ix, iz);
+    // Clamp to the unit circle rather than normalising: digital diagonals lose
+    // their speed bonus, but an analog half-push still means half speed.
+    if (il > 1) { ix /= il; iz /= il; il = 1; }
+    const hasInput = il > 0.04;
     this.moveInput = hasInput;
 
     const yaw = p.yaw;
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);
-    const wishX = fx * iz + rx * ix, wishZ = fz * iz + rz * ix;
+    let wishX = fx * iz + rx * ix, wishZ = fz * iz + rz * ix;
+    const wl = Math.hypot(wishX, wishZ);
+    if (wl > 1e-4) { wishX /= wl; wishZ /= wl; }   // unit direction; il is the magnitude
 
     // ---- mantle: a scripted pull-up that owns movement while it runs
     if (this.mantle) {
@@ -505,7 +581,7 @@ export class Game {
       if (this.time - this.lastSprintTap < 0.32 && this.tacFuel > 0.8) this.tacSprint = true;
       this.lastSprintTap = this.time;
     }
-    const forwardish = iz > 0.25;
+    const forwardish = iz > 0.25 && il > 0.6;
     this.sprinting = sprintKey && forwardish && !wantAds && !firing
       && p.grounded && this.slideTimer <= 0 && this.throwTimer < 0;
     if (!this.sprinting) this.tacSprint = false;
@@ -563,6 +639,7 @@ export class Game {
     }
     target *= w.moveMul;
     if (this.reloadTimer >= 0) target *= 0.95;
+    if (!sliding) target *= Math.min(1, il);   // analog magnitude
 
     // ---- friction
     if (sliding) {
@@ -1367,6 +1444,7 @@ export class Game {
       streakRewards: STREAKS.map((s) => ({ name: s.name, at: s.at, key: s.key, ready: !!this.streakEarned[s.id] })),
       uav: this.uavTime,
       blips,
+      touch: this.touch && this.touch.enabled ? this.touch : null,
       dead: this.player.dead,
       killerName: this.killerName,
       respawnIn: this.respawnIn, respawnTotal: this.respawnTotal,

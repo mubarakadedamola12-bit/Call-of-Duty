@@ -14,8 +14,14 @@ const MAX_BEAMS = 400;
 const MAX_DECALS = 320;
 const ARRAY_UNIT_ALBEDO = 12;
 const ARRAY_UNIT_SURF = 13;
-const SHADOW_NEAR_SIZE = 2048;
-const SHADOW_FAR_SIZE = 2048;
+
+/** Per-tier render settings. Mobile GPUs need the shadow maps and the SSAO
+ *  budget cut hard before anything else. */
+export const QUALITY = {
+  low: { shadow: 1024, shadowFar: 1024, ssao: false, ssaoSamples: 8, bloomMips: 4, bots: 5 },
+  medium: { shadow: 1536, shadowFar: 1536, ssao: true, ssaoSamples: 10, bloomMips: 5, bots: 7 },
+  high: { shadow: 2048, shadowFar: 2048, ssao: true, ssaoSamples: 16, bloomMips: 6, bots: 9 },
+};
 
 export const defaultMaterial = () => ({
   layer: MAT.CONCRETE,
@@ -30,9 +36,10 @@ export const defaultMaterial = () => ({
 });
 
 export class Renderer {
-  constructor(canvas, gl) {
+  constructor(canvas, gl, quality = 'high') {
     this.canvas = canvas;
     this.gl = gl;
+    this.q = { ...QUALITY[quality] || QUALITY.high };
     this.tri = new FullscreenTri(gl);
 
     this.width = 1; this.height = 1;
@@ -150,10 +157,22 @@ export class Renderer {
     this.particleVAO = this._instancedVAO(MAX_PARTICLES * 48);
     this.beamVAO = this._instancedVAO(MAX_BEAMS * 48);
     this.decalVAO = this._instancedVAO(MAX_DECALS * 48);
+    this._initShadow();
+  }
 
+  /** (Re)creates the cascade targets — called on construction and on a
+   *  quality change, since the map resolution is baked into the textures. */
+  _initShadow() {
+    const gl = this.gl;
+    if (this.shadowRT) {
+      for (const rt of this.shadowRT) {
+        gl.deleteFramebuffer(rt.fbo);
+        gl.deleteTexture(rt.depth);
+      }
+    }
     this.shadowRT = [
-      new RT(gl, SHADOW_NEAR_SIZE, SHADOW_NEAR_SIZE, [], true),
-      new RT(gl, SHADOW_FAR_SIZE, SHADOW_FAR_SIZE, [], true),
+      new RT(gl, this.q.shadow, this.q.shadow, [], true),
+      new RT(gl, this.q.shadowFar, this.q.shadowFar, [], true),
     ];
     // NOTE: these are sampled through a plain sampler2D, so the filter MUST be
     // NEAREST — a depth texture with COMPARE_MODE=NONE and a linear filter is
@@ -166,6 +185,15 @@ export class Renderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     }
+  }
+
+  setQuality(name) {
+    const q = QUALITY[name];
+    if (!q) return;
+    const shadowChanged = q.shadow !== this.q.shadow || q.shadowFar !== this.q.shadowFar;
+    this.q = { ...q };
+    if (shadowChanged) this._initShadow();
+    if (this.width > 1) { const w = this.width, h = this.height; this.width = 0; this.resize(w, h); }
   }
 
   resize(w, h) {
@@ -211,7 +239,7 @@ export class Renderer {
     // Bloom pyramid.
     this.bloom = [];
     let bw = Math.max(1, w >> 1), bh = Math.max(1, h >> 1);
-    for (let i = 0; i < 6 && bw > 4 && bh > 4; i++) {
+    for (let i = 0; i < this.q.bloomMips && bw > 4 && bh > 4; i++) {
       this.bloom.push(new RT(gl, bw, bh, [F16], false));
       bw = Math.max(1, bw >> 1); bh = Math.max(1, bh >> 1);
     }
@@ -294,7 +322,7 @@ export class Renderer {
   _fitCascade(index, size) {
     const c = this.camPos;
     // Snap the cascade centre to texel increments so shadows don't crawl.
-    const res = index === 0 ? SHADOW_NEAR_SIZE : SHADOW_FAR_SIZE;
+    const res = index === 0 ? this.q.shadow : this.q.shadowFar;
     const texel = (size * 2) / res;
     const fwd = index === 0 ? size * 0.42 : 0;
     // Push the near cascade slightly ahead of the player.
@@ -410,6 +438,18 @@ export class Renderer {
     gl.depthMask(false);
     gl.disable(gl.CULL_FACE);
 
+    if (!this.q.ssao) {
+      // Fill the AO target with white once so the resolve is unaffected.
+      if (!this._aoCleared) {
+        this.aoRT.bind();
+        gl.clearColor(1, 1, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        this._aoCleared = true;
+      }
+      return;
+    }
+    this._aoCleared = false;
+
     this.aoRT.bind();
     const pg = this.pg.ssao.use();
     pg.tex('uDepth', this.depthCopy);
@@ -422,6 +462,7 @@ export class Renderer {
     pg.f('uRadius', this.ssaoRadius);
     pg.f('uBias', 0.022);
     pg.f('uIntensity', this.ssaoIntensity);
+    pg.i('uSamples', this.q.ssaoSamples);
     pg.f('uFrame', this.frame % 64);
     this.tri.draw();
 
@@ -457,10 +498,10 @@ export class Renderer {
     pg.m4('uLightVPFar', this.lightVP[1]);
     pg.v3('uCamPos', this.camPos);
     pg.f2('uRes', this.width, this.height);
-    pg.f('uShadowTexel', 1 / SHADOW_NEAR_SIZE);
-    pg.f('uShadowTexelFar', 1 / SHADOW_FAR_SIZE);
-    pg.f('uShadowWorld', (this.cascadeSize[0] * 2) / SHADOW_NEAR_SIZE);
-    pg.f('uShadowWorldFar', (this.cascadeSize[1] * 2) / SHADOW_FAR_SIZE);
+    pg.f('uShadowTexel', 1 / this.q.shadow);
+    pg.f('uShadowTexelFar', 1 / this.q.shadowFar);
+    pg.f('uShadowWorld', (this.cascadeSize[0] * 2) / this.q.shadow);
+    pg.f('uShadowWorldFar', (this.cascadeSize[1] * 2) / this.q.shadowFar);
     pg.f('uCascadeSplit', this.cascadeSize[0] * 0.78);
     pg.v3('uSunDir', this.sunDir);
     pg.f3('uSunColor', this.sunColor[0] * this.sunIntensity, this.sunColor[1] * this.sunIntensity, this.sunColor[2] * this.sunIntensity);

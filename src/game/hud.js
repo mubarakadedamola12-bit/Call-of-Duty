@@ -22,11 +22,15 @@ export class HUD {
     this.banner = null;
   }
 
-  resize(w, h, dpr) {
+  resize(w, h, dpr, safe) {
     this.dpr = dpr;
     this.c.width = w * dpr; this.c.height = h * dpr;
     this.c.style.width = w + 'px'; this.c.style.height = h + 'px';
     this.w = w; this.h = h;
+    this.safe = safe || { l: 0, r: 0, t: 0, b: 0 };
+    // Compact layout on phones: everything shrinks and pulls in from the edges.
+    this.compact = Math.min(w, h) < 520;
+    this.us = this.compact ? clamp(Math.min(w, h) / 430, 0.72, 1) : 1;
   }
 
   /** Pre-render the static map footprint once. */
@@ -94,6 +98,8 @@ export class HUD {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.textBaseline = 'middle';
+    if (!this.safe) this.safe = { l: 0, r: 0, t: 0, b: 0 };
+    if (!this.us) this.us = 1;
 
     if (s.scoped > 0.5) this._scope(ctx, w, h, s);
     if (!s.dead && s.scoped < 0.5) this._crosshair(ctx, w, h, s);
@@ -104,11 +110,89 @@ export class HUD {
     this._ammo(ctx, w, h, s);
     this._health(ctx, w, h, s);
     this._score(ctx, w, h, s);
-    this._killfeed(ctx, w, h);
+    this._killfeed(ctx, w, h, s.touch);
     this._popups(ctx, w, h);
     this._streaks(ctx, w, h, s);
+    if (s.touch) this._touch(ctx, s.touch);
     if (s.dead) this._deathScreen(ctx, w, h, s);
     if (this.banner) this._banner(ctx, w, h);
+  }
+
+  /* --------------------------------------------------- on-screen controls */
+
+  _touch(ctx, tc) {
+    ctx.save();
+    ctx.textAlign = 'center';
+
+    // Floating movement stick.
+    const st = tc.stick;
+    if (st.active) {
+      ctx.beginPath();
+      ctx.arc(st.ox, st.oy, st.max, 0, 6.2832);
+      ctx.fillStyle = 'rgba(8,12,18,0.24)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(220,232,245,0.30)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const kx = st.ox + st.dx * st.max, ky = st.oy - (-st.dy) * st.max;
+      ctx.beginPath();
+      ctx.arc(kx, ky, st.max * 0.42, 0, 6.2832);
+      ctx.fillStyle = 'rgba(235,244,252,0.32)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,194,51,0.70)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      if (tc.autoSprint) {
+        ctx.font = F(700, 11 * tc.scale, '');
+        ctx.fillStyle = ACCENT;
+        ctx.fillText('SPRINT', st.ox, st.oy - st.max - 12 * tc.scale);
+      }
+    } else {
+      // Resting hint so the thumb knows where to land.
+      const z = tc.stickZone;
+      const cx = z.x0 + (z.x1 - z.x0) * 0.40;
+      const cy = z.y0 + (z.y1 - z.y0) * 0.60;
+      ctx.beginPath();
+      ctx.arc(cx, cy, st.max, 0, 6.2832);
+      ctx.fillStyle = 'rgba(8,12,18,0.14)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(220,232,245,0.22)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, st.max * 0.40, 0, 6.2832);
+      ctx.strokeStyle = 'rgba(220,232,245,0.16)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.font = F(600, 10 * tc.scale, '');
+      ctx.fillStyle = 'rgba(210,225,240,0.34)';
+      ctx.fillText('MOVE', cx, cy);
+    }
+
+    for (const b of tc.buttons) {
+      if (b.r <= 0) continue;
+      const on = b.down;
+      const fire = b.id === 'fire';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, 6.2832);
+      ctx.fillStyle = on
+        ? (fire ? 'rgba(255,90,60,0.34)' : 'rgba(255,194,51,0.28)')
+        : 'rgba(8,12,18,0.30)';
+      ctx.fill();
+      ctx.strokeStyle = on ? 'rgba(255,194,51,0.95)' : 'rgba(220,232,245,0.34)';
+      ctx.lineWidth = fire ? 2.4 : 1.8;
+      ctx.stroke();
+
+      ctx.fillStyle = on ? '#fff' : 'rgba(232,242,251,0.80)';
+      ctx.font = F(600, b.r * 0.82, '');
+      ctx.fillText(b.glyph, b.x, b.y - b.r * 0.06);
+      if (b.r > 24) {
+        ctx.font = F(600, Math.max(8, b.r * 0.30), '');
+        ctx.fillStyle = on ? 'rgba(255,220,150,0.95)' : 'rgba(210,225,240,0.55)';
+        ctx.fillText(b.label, b.x, b.y + b.r * 0.62);
+      }
+    }
+    ctx.restore();
   }
 
   /* -------------------------------------------------------- crosshair */
@@ -242,7 +326,7 @@ export class HUD {
   /* --------------------------------------------------------- compass */
 
   _compass(ctx, w, h, s) {
-    const cx = w / 2, y = 26, halfW = Math.min(230, w * 0.22);
+    const cx = w / 2, y = this.safe.t + 26 * this.us, halfW = Math.min(230, w * 0.22);
     ctx.save();
     ctx.beginPath(); ctx.rect(cx - halfW, y - 16, halfW * 2, 32); ctx.clip();
     const grad = ctx.createLinearGradient(cx - halfW, 0, cx + halfW, 0);
@@ -285,8 +369,9 @@ export class HUD {
   /* --------------------------------------------------------- minimap */
 
   _minimap(ctx, s) {
-    const size = 152, pad = 18;
-    const cx = pad + size / 2, cy = pad + size / 2;
+    const u = this.us;
+    const size = 152 * u, pad = 18 * u;
+    const cx = this.safe.l + pad + size / 2, cy = this.safe.t + pad + size / 2;
     ctx.save();
     // Frame.
     ctx.beginPath(); ctx.arc(cx, cy, size / 2, 0, 6.2832);
@@ -376,7 +461,12 @@ export class HUD {
   /* ------------------------------------------------------------ ammo */
 
   _ammo(ctx, w, h, s) {
-    const x = w - 34, y = h - 42;
+    const u = this.us;
+    // On touch the whole bottom-right corner belongs to the thumb cluster, so
+    // the readout moves to the top-right, below the utility buttons.
+    const ts = s.touch ? (s.touch.scale || 1) : 0;
+    const x = w - this.safe.r - (s.touch ? 26 : 34) * u;
+    const y = s.touch ? this.safe.t + 132 * ts : h - this.safe.b - 42 * u;
     ctx.textAlign = 'right';
     const low = s.ammo <= Math.max(1, Math.ceil(s.magSize * 0.25));
     ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 6;
@@ -438,7 +528,13 @@ export class HUD {
   }
 
   _health(ctx, w, h, s) {
-    const x = 26, y = h - 40, bw = 210, bh = 7;
+    const u = this.us;
+    const x = this.safe.l + (s.touch ? 20 : 26) * u;
+    // Touch: tuck it under the minimap, well clear of the movement thumb.
+    const y = s.touch
+      ? this.safe.t + (18 + 152 + 30) * u
+      : h - this.safe.b - 40 * u;
+    const bw = (s.touch ? 150 : 210) * u, bh = 7 * u;
     const frac = clamp(s.health / s.maxHealth, 0, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
     ctx.fillRect(x - 2, y - 2, bw + 4, bh + 4);
@@ -460,7 +556,7 @@ export class HUD {
   /* ----------------------------------------------------------- score */
 
   _score(ctx, w, h, s) {
-    const cx = w / 2, y = 58;
+    const cx = w / 2, y = this.safe.t + 58 * this.us;
     ctx.textAlign = 'center';
     ctx.font = F(700, 22, '');
     const t = Math.max(0, s.timeLeft);
@@ -493,8 +589,11 @@ export class HUD {
     ctx.fillRect(cx + 44, y + 28, bw * clamp(s.scoreEnemies / s.scoreLimit, 0, 1), 3);
   }
 
-  _killfeed(ctx, w, h) {
-    const x = w - 26, y0 = 100;
+  _killfeed(ctx, w, h, touch) {
+    const u = this.us;
+    const right = !touch;
+    const x = right ? w - this.safe.r - 26 * u : this.safe.l + 20 * u + 170 * u;
+    const y0 = right ? this.safe.t + 100 * u : this.safe.t + (18 + 152 + 60) * u;
     ctx.textAlign = 'right';
     ctx.font = F(600, 13, '');
     for (let i = 0; i < this.killfeed.length; i++) {
@@ -504,7 +603,7 @@ export class HUD {
       const y = y0 + i * 23;
       ctx.save();
       ctx.globalAlpha = clamp(fade, 0, 1);
-      ctx.translate((1 - slide) * 40, 0);
+      ctx.translate((right ? 1 : -1) * (1 - slide) * 40, 0);
       const vw = ctx.measureText(k.victim).width;
       const kw = ctx.measureText(k.killer).width;
       const icon = 26;
@@ -545,7 +644,8 @@ export class HUD {
   }
 
   _streaks(ctx, w, h, s) {
-    const x = 26, y = h - 76;
+    if (s.touch) return;   // streaks live on their own buttons under touch
+    const x = this.safe.l + 26, y = h - this.safe.b - 76;
     ctx.textAlign = 'left';
     ctx.font = F(700, 12, '');
     ctx.fillStyle = 'rgba(210,225,240,0.5)';
