@@ -137,6 +137,8 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec2 aUV;
 layout(location=3) in vec4 aTan;
+layout(location=4) in float aLayer;   // <0 means "use the uniform"
+layout(location=5) in vec3 aTint;
 
 uniform mat4 uVP;
 uniform mat4 uModel;
@@ -147,6 +149,8 @@ out vec3 vN;
 out vec2 vUV;
 out vec3 vT;
 out float vTW;
+flat out float vLayer;
+out vec3 vTint;
 
 void main(){
   vec4 wp = uModel * vec4(aPos, 1.0);
@@ -155,11 +159,14 @@ void main(){
   vT  = normalize(uNM * aTan.xyz);
   vTW = aTan.w;
   vUV = aUV;
+  vLayer = aLayer;
+  vTint = aTint;
   gl_Position = uVP * wp;
 }`;
 
 export const gbufferFS = H + COMMON + `
 in vec3 vW; in vec3 vN; in vec2 vUV; in vec3 vT; in float vTW;
+flat in float vLayer; in vec3 vTint;
 
 uniform sampler2DArray uAlbedoArr;
 uniform sampler2DArray uSurfArr;
@@ -179,10 +186,11 @@ layout(location=2) out vec4 oMisc;     // rgb emissive/EM_SCALE, a metallic
 
 void main(){
   vec2 uv = vUV * uUVScale;
-  vec4 alb = texture(uAlbedoArr, vec3(uv, uLayer));
-  vec4 srf = texture(uSurfArr,   vec3(uv, uLayer));
+  float layer = vLayer < 0.0 ? uLayer : vLayer;
+  vec4 alb = texture(uAlbedoArr, vec3(uv, layer));
+  vec4 srf = texture(uSurfArr,   vec3(uv, layer));
 
-  vec3 base = alb.rgb * uTint;
+  vec3 base = alb.rgb * uTint * vTint;
 
   // Break tiling with two octaves of low-frequency world-space variation.
   if (uMacro > 0.0){
@@ -206,7 +214,7 @@ void main(){
 /* ---------------------------------------------------------------- shadow */
 
 export const shadowVS = HV + `
-layout(location=0) in vec3 aPos;
+layout(location=0) in vec3 aPos;   // other attributes exist in the VAO but are unused here
 uniform mat4 uLightVP;
 uniform mat4 uModel;
 void main(){ gl_Position = uLightVP * uModel * vec4(aPos,1.0); }`;
@@ -323,8 +331,11 @@ uniform sampler2D uMisc;
 uniform sampler2D uDepth;
 uniform sampler2D uAO;
 uniform sampler2D uShadow;
-
 uniform sampler2D uShadowFar;
+uniform sampler2D uClouds;
+uniform float uCloudAmt;
+uniform float uCloudScale;
+uniform vec2  uCloudDrift;
 
 uniform mat4  uInvVP;
 uniform mat4  uLightVP;
@@ -400,6 +411,20 @@ float shadowFactor(vec3 wpos, vec3 Ngeo, float NoLg){
   return mix(near, far, smoothstep(0.80, 0.97, edge));
 }
 
+/**
+ * Drifting cloud cover, projected straight down onto the world. Two octaves at
+ * different scales and speeds keeps it from reading as a repeating tile.
+ */
+float cloudShadow(vec3 W){
+  if (uCloudAmt <= 0.001) return 1.0;
+  vec2 base = W.xz * uCloudScale + uCloudDrift;
+  float a = texture(uClouds, base).r;
+  float b = texture(uClouds, base * 2.31 + uCloudDrift * 0.6 + 0.37).r;
+  float cover = a * 0.68 + b * 0.32;
+  // Soft edges: a hard cut looks like a stencil, not weather.
+  return 1.0 - smoothstep(0.34, 0.72, cover) * uCloudAmt;
+}
+
 vec3 shade(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 diffCol, vec3 f0, float rough){
   vec3 Hv = normalize(V + L);
   float NoL = sat(dot(N, L));
@@ -459,6 +484,7 @@ void main(){
   // Fade the sun out across the geometric terminator so normal-mapped detail
   // can't be lit by a sun that the surface itself is facing away from.
   sh *= smoothstep(-0.02, 0.14, NoLg);
+  sh *= cloudShadow(W);
   vec3 col = shade(N, V, Lsun, uSunColor * sh, diffCol, f0, rough);
 
   // ---- ambient / IBL from the analytic sky

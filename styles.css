@@ -154,3 +154,44 @@ body.touch .desktoponly{display:none}
   .card{flex:1 1 45%}
   button.primary{padding:11px 40px;font-size:15px}
 }
+
+
+/* =============================================================== settings */
+
+button.wide{width:100%;padding:11px 0;font-size:13px;margin-top:4px}
+.wide-panel{flex-direction:row;flex-wrap:wrap;justify-content:center}
+.summary{font-size:12px;color:#9fb0c1;line-height:1.85;margin-bottom:10px}
+.summary b{color:#ffc233;font-weight:600}
+
+#settings{gap:14px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.tab{font-family:inherit;font-size:12px;font-weight:600;letter-spacing:.22em;text-indent:.22em;
+  padding:9px 20px;background:rgba(255,255,255,.04);color:#9fb0c1;cursor:pointer;
+  border:1px solid rgba(255,255,255,.10);transition:.14s;text-transform:uppercase;
+  clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.tab:hover{color:#dbe6f1;border-color:rgba(255,255,255,.22)}
+.tab.on{background:rgba(255,194,51,.16);border-color:rgba(255,194,51,.65);color:#ffd88a}
+
+.setbody{width:min(720px,92vw);max-height:min(52vh,430px);overflow-y:auto;
+  background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);padding:16px 20px;
+  clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}
+.setgroup{display:none}
+.setgroup.on{display:block}
+.setrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:9px 0;
+  font-size:13px;color:#b9c7d6;border-bottom:1px solid rgba(255,255,255,.05)}
+.setrow:last-child{border-bottom:0}
+.setrow>span{flex:0 0 42%;color:#cfdae6}
+.setrow input[type=range]{flex:1}
+.setrow select{flex:1;max-width:190px}
+.setrow>b{flex:0 0 66px;text-align:right;color:#ffc233;font-weight:600;font-size:12px;
+  font-variant-numeric:tabular-nums}
+.setrow .hint2{flex:0 0 100%;font-size:11px;line-height:1.5;color:#6d7a89;
+  margin:-4px 0 0;letter-spacing:.03em}
+.setrow input[type=checkbox]{width:15px;height:15px;accent-color:#ffc233;cursor:pointer}
+
+@media (max-width:900px), (pointer:coarse){
+  .setbody{max-height:46vh;padding:12px 14px}
+  .setrow{font-size:12px;padding:7px 0}
+  .setrow>span{flex-basis:46%}
+  .tab{padding:7px 13px;font-size:11px;letter-spacing:.14em}
+}

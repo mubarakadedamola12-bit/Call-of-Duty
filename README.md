@@ -167,6 +167,9 @@ shadow (2 cascades) → G-buffer (+decals) → depth blit → SSAO + bilateral b
 * **Bloom** — the pyramidal down/upsample from the Call of Duty: Advanced
   Warfare talk: Karis-weighted prefilter, 13-tap downsample, 3×3 tent upsample,
   blended progressively so the pyramid stays energy-neutral.
+* **Cloud shadows** — drifting cover projected onto the world from a baked
+  tileable noise map. Two texture fetches rather than ten octaves of FBM per
+  pixel, which at 2.7 megapixels is the difference between free and expensive.
 * **Grade** — ACES filmic (Hill fit), lift/gain/contrast/saturation, vignette,
   chromatic aberration, film grain, and ordered dithering to kill banding.
 * Radial sprint blur, peripheral ADS blur, damage and low-health grading.
@@ -207,6 +210,51 @@ src/render/         renderer · shaders (GLSL) · procedural materials · geomet
 src/game/           world · game rules · actors/AI · weapons · viewmodel · fx · hud
 ```
 
+## Settings
+
+A dedicated settings screen (from the briefing, or from pause) covering
+**Graphics**, **Controls**, **Gameplay** and **Audio**. One schema in
+`src/main.js` drives the DOM, the live application, persistence and reset —
+adding an option means adding a row, not wiring another handler.
+
+### Difficulty
+
+Firefights being decided in a quarter of a second is authentic but unforgiving,
+so difficulty scales *everyone's* health rather than just the player's:
+
+| | health | damage you take | enemy skill | AR time-to-kill |
+|---|---|---|---|---|
+| Recruit | 190 | 55% | 42% | 583 ms |
+| **Regular** (default) | **150** | **78%** | **62%** | **417 ms** |
+| Hardened | 120 | 100% | 84% | 333 ms |
+| Veteran | 100 | 115% | 100% | 250 ms |
+
+Changing it mid-match rescales everyone proportionally rather than requiring a
+restart.
+
+## Performance
+
+The frame was costing ~7.3 ms of CPU, essentially all of it in draw submission
+and fill rate. Three changes account for most of the fix:
+
+* **Fewer draw calls — ~950 to ~300.** Materials became per-vertex (a `layer`
+  and `tint` in the vertex format), so a soldier is one draw per bone instead
+  of one per bone *per material*, and a weapon is one draw instead of five.
+* **Culling.** Every draw carries a bounding sphere; the G-buffer pass tests it
+  against the view frustum and the shadow pass against each cascade's ortho box.
+  The visible set is then sorted by material so the "same material as last
+  draw" guard actually hits.
+* **Render resolution.** A 1440×860 window at `devicePixelRatio` 2 is a
+  5-megapixel deferred frame. The cap now defaults to 1.5, which with FXAA on
+  top is visually near-identical for roughly half the pixels.
+
+Plus a 60 FPS limiter (a 120 Hz panel was doing twice the work for nothing) and
+a quarter-rate simulation behind the briefing screen.
+
+Net: **7.3 ms → 3.7 ms** per frame on desktop, **0.7 ms** on the mobile tier.
+Render resolution and the frame cap are the first two knobs in the settings if
+you need more.
+
 ## Quality tiers
 
 Detected automatically (mobile → `low`) and overridable on the briefing screen.
@@ -220,14 +268,9 @@ Shadow resolution and SSAO are the first things a phone GPU cannot afford:
 
 Mobile also starts at a 0.65 resolution scale and a wider 85° FOV.
 
-## Settings
-
-Quality, resolution scale, FOV, film grain, sensitivity, look acceleration
-(touch only), aim assist and volume live on the briefing screen and persist to
-`localStorage`. Drop the resolution scale first if you need more frames.
-
 Sensitivity drives both input paths from one slider and one base constant
-(`Input.BASE_SENSITIVITY`), spanning 0.20×–4.50×.
+(`Input.BASE_SENSITIVITY`), spanning 0.20×–4.50×. Everything persists to
+`localStorage`.
 
 ## Layout note
 

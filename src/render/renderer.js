@@ -12,6 +12,8 @@ import { buildMaterialArrays, makeNoiseTex, MAT } from './textures.js';
 const MAX_PARTICLES = 3000;
 const MAX_BEAMS = 400;
 const MAX_DECALS = 320;
+const SORT_BY_MATERIAL = (a, b) => a.key - b.key;
+
 const ARRAY_UNIT_ALBEDO = 12;
 const ARRAY_UNIT_SURF = 13;
 
@@ -58,6 +60,11 @@ export class Renderer {
     this.sunIntensity = 4.4;
     this.ambientTint = v3(0.66, 0.77, 1.0);
     this.ambientMul = 3.10;
+    // Drifting cloud cover over the sun. Cheap (two texture fetches) and it is
+    // the difference between "outdoors" and "a lamp pointed at a diorama".
+    this.cloudAmount = 0.55;
+    this.cloudScale = 0.0045;
+    this.cloudSpeed = 0.0055;
     this.fogColor = v3(0.32, 0.29, 0.31);
     this.fogDensity = 0.0026;
     this.fogHeight = 40;
@@ -94,6 +101,14 @@ export class Renderer {
 
     this.frame = 0;
     this.time = 0;
+
+    // Culling. Frustum planes are re-extracted whenever the camera moves; each
+    // draw item carries a world-space bounding sphere.
+    this.frustum = new Float32Array(24);   // 6 planes x (nx,ny,nz,d)
+    this.cull = true;
+    this.stats = { submitted: 0, drawn: 0, shadowDrawn: 0 };
+    this._matId = new Map();
+    this._nextMatId = 1;
 
     // ---- shadow matrices
     this.lightVP = [m4(), m4()];
@@ -259,6 +274,34 @@ export class Renderer {
     M4.mul(this.vp, this.proj, this.view);
     M4.invert(this.invVP, this.vp);
     M4.invert(this.invProj, this.proj);
+    this._extractFrustum(this.vp, this.frustum);
+  }
+
+  /** Gribb-Hartmann plane extraction, normalised so d is a real distance. */
+  _extractFrustum(m, out) {
+    const rows = [
+      [3, 0, 1], [3, 0, -1],   // left, right
+      [3, 1, 1], [3, 1, -1],   // bottom, top
+      [3, 2, 1], [3, 2, -1],   // near, far
+    ];
+    for (let i = 0; i < 6; i++) {
+      const [a, b, sgn] = rows[i];
+      let nx = m[a] + sgn * m[b];
+      let ny = m[4 + a] + sgn * m[4 + b];
+      let nz = m[8 + a] + sgn * m[8 + b];
+      let d = m[12 + a] + sgn * m[12 + b];
+      const len = Math.hypot(nx, ny, nz) || 1;
+      out[i * 4] = nx / len; out[i * 4 + 1] = ny / len;
+      out[i * 4 + 2] = nz / len; out[i * 4 + 3] = d / len;
+    }
+  }
+
+  _sphereInFrustum(x, y, z, r) {
+    const f = this.frustum;
+    for (let i = 0; i < 6; i++) {
+      if (f[i * 4] * x + f[i * 4 + 1] * y + f[i * 4 + 2] * z + f[i * 4 + 3] < -r) return false;
+    }
+    return true;
   }
 
   beginFrame(dt) {
@@ -273,11 +316,30 @@ export class Renderer {
   /** @param model mat4 (copied) */
   draw(mesh, model, mat, castShadow = true) {
     let it = this.drawPool[this.draws.length];
-    if (!it) { it = { mesh: null, model: m4(), mat: null, castShadow: true }; this.drawPool.push(it); }
+    if (!it) {
+      it = { mesh: null, model: m4(), mat: null, castShadow: true, x: 0, y: 0, z: 0, r: 0, key: 0 };
+      this.drawPool.push(it);
+    }
     it.mesh = mesh;
     it.model.set(model);
     it.mat = mat;
     it.castShadow = castShadow;
+
+    // World-space bounding sphere: transform the centre, scale the radius by
+    // the largest axis scale so non-uniform scaling stays conservative.
+    const m = model, bx = mesh.bx, by = mesh.by, bz = mesh.bz;
+    it.x = m[0] * bx + m[4] * by + m[8] * bz + m[12];
+    it.y = m[1] * bx + m[5] * by + m[9] * bz + m[13];
+    it.z = m[2] * bx + m[6] * by + m[10] * bz + m[14];
+    const s0 = m[0] * m[0] + m[1] * m[1] + m[2] * m[2];
+    const s1 = m[4] * m[4] + m[5] * m[5] + m[6] * m[6];
+    const s2 = m[8] * m[8] + m[9] * m[9] + m[10] * m[10];
+    it.r = mesh.br * Math.sqrt(Math.max(s0, s1, s2));
+
+    // Sort key so the G-buffer pass can skip redundant material uploads.
+    let id = this._matId.get(mat);
+    if (id === undefined) { id = this._nextMatId++; this._matId.set(mat, id); }
+    it.key = id;
     this.draws.push(it);
   }
 
@@ -356,17 +418,34 @@ export class Renderer {
     gl.cullFace(gl.BACK);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1.1, 1.8);
+    let shadowDrawn = 0;
     for (let c = 0; c < 2; c++) {
-      this._fitCascade(c, this.cascadeSize[c]);
+      const size = this.cascadeSize[c];
+      this._fitCascade(c, size);
       this.shadowRT[c].bind();
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      pg.m4('uLightVP', this.lightVP[c]);
+      const lvp = this.lightVP[c];
+      pg.m4('uLightVP', lvp);
+      // Radius expressed in NDC for this cascade's ortho box.
+      const inv = 1 / size;
       for (const it of this.draws) {
         if (!it.castShadow) continue;
+        if (this.cull) {
+          // Project the centre into light clip space (ortho, so w == 1) and
+          // reject anything outside the box. Depth is left unculled on the near
+          // side so off-screen geometry can still cast into the cascade.
+          const x = lvp[0] * it.x + lvp[4] * it.y + lvp[8] * it.z + lvp[12];
+          const y = lvp[1] * it.x + lvp[5] * it.y + lvp[9] * it.z + lvp[13];
+          const z = lvp[2] * it.x + lvp[6] * it.y + lvp[10] * it.z + lvp[14];
+          const rn = it.r * inv;
+          if (x < -1 - rn || x > 1 + rn || y < -1 - rn || y > 1 + rn || z > 1 + rn) continue;
+        }
         pg.m4('uModel', it.model);
         it.mesh.draw();
+        shadowDrawn++;
       }
     }
+    this.stats.shadowDrawn = shadowDrawn;
     gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
@@ -390,8 +469,22 @@ export class Renderer {
     pg.tex('uAlbedoArr', this.matAlbedo, gl.TEXTURE_2D_ARRAY, ARRAY_UNIT_ALBEDO);
     pg.tex('uSurfArr', this.matSurf, gl.TEXTURE_2D_ARRAY, ARRAY_UNIT_SURF);
     const nm = this._m.nm;
-    let lastMat = null;
+
+    // Visible set, sorted by material: without the sort the "same material as
+    // last draw" guard almost never hits, and every draw re-uploads nine
+    // uniforms it did not need to.
+    const vis = this._visible || (this._visible = []);
+    vis.length = 0;
     for (const it of this.draws) {
+      if (this.cull && !this._sphereInFrustum(it.x, it.y, it.z, it.r)) continue;
+      vis.push(it);
+    }
+    vis.sort(SORT_BY_MATERIAL);
+    this.stats.submitted = this.draws.length;
+    this.stats.drawn = vis.length;
+
+    let lastMat = null;
+    for (const it of vis) {
       const m = it.mat;
       pg.m4('uModel', it.model);
       M4.normalMat3(nm, it.model);
@@ -410,6 +503,7 @@ export class Renderer {
       }
       it.mesh.draw();
     }
+    gl.bindVertexArray(null);
 
     // Decals write into the G-buffer so they receive full lighting.
     if (this.dCount > 0) {
@@ -493,6 +587,10 @@ export class Renderer {
     pg.tex('uAO', this.aoRT.tex);
     pg.tex('uShadow', this.shadowRT[0].depth);
     pg.tex('uShadowFar', this.shadowRT[1].depth);
+    pg.tex('uClouds', this.cloudTex);
+    pg.f('uCloudAmt', this.cloudAmount);
+    pg.f('uCloudScale', this.cloudScale);
+    pg.f2('uCloudDrift', this.time * this.cloudSpeed, this.time * this.cloudSpeed * 0.42);
     pg.m4('uInvVP', this.invVP);
     pg.m4('uLightVP', this.lightVP[0]);
     pg.m4('uLightVPFar', this.lightVP[1]);

@@ -141,11 +141,16 @@ export function planeGeo(w = 1, d = 1, sub = 1, uvScale = 1) {
 
 /* ----------------------------------------------------------------- builder */
 
+const ONE3 = [1, 1, 1];
 const _tmp = m4();
 const _nm = new Float32Array(9);
 
 export class Builder {
-  constructor() { this.pos = []; this.nrm = []; this.uv = []; this.idx = []; }
+  constructor() {
+    this.pos = []; this.nrm = []; this.uv = []; this.idx = [];
+    // Per-vertex material, so one mesh can hold several looks in one draw call.
+    this.layer = []; this.tint = [];
+  }
 
   /**
    * @param geo   primitive from *Geo()
@@ -153,9 +158,12 @@ export class Builder {
    * @param uvS   uv multiplier
    * @param uvO   [u,v] offset (used to de-tile repeated props)
    */
-  add(geo, xf = null, uvS = 1, uvO = [0, 0]) {
+  /** @param vmat optional {layer, tint} baked per-vertex instead of per-draw */
+  add(geo, xf = null, uvS = 1, uvO = [0, 0], vmat = null) {
     const base = this.pos.length / 3;
     const n = geo.pos.length / 3;
+    const vl = vmat ? vmat.layer : -1;
+    const vt = (vmat && vmat.tint) || ONE3;
     if (xf) M4.normalMat3(_nm, xf);
     for (let i = 0; i < n; i++) {
       const px = geo.pos[i * 3], py = geo.pos[i * 3 + 1], pz = geo.pos[i * 3 + 2];
@@ -176,6 +184,8 @@ export class Builder {
         this.nrm.push(nx, ny, nz);
       }
       this.uv.push(geo.uv[i * 2] * uvS + uvO[0], geo.uv[i * 2 + 1] * uvS + uvO[1]);
+      this.layer.push(vl);
+      this.tint.push(vt[0], vt[1], vt[2]);
     }
     for (let i = 0; i < geo.idx.length; i++) this.idx.push(base + geo.idx[i]);
     return this;
@@ -231,9 +241,30 @@ export class Builder {
       data[o + 3] = nx; data[o + 4] = ny; data[o + 5] = nz;
       data[o + 6] = uv[i * 2]; data[o + 7] = uv[i * 2 + 1];
       data[o + 8] = tx; data[o + 9] = ty; data[o + 10] = tz; data[o + 11] = w;
+      data[o + 12] = this.layer[i];
+      data[o + 13] = this.tint[i * 3];
+      data[o + 14] = this.tint[i * 3 + 1];
+      data[o + 15] = this.tint[i * 3 + 2];
     }
     const indices = vcount > 65535 ? new Uint32Array(idx) : new Uint16Array(idx);
-    return new Mesh(gl, data, indices);
+
+    // Bounding sphere for frustum / shadow-cascade culling.
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < vcount; i++) {
+      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+    let r2 = 0;
+    for (let i = 0; i < vcount; i++) {
+      const dx = pos[i * 3] - cx, dy = pos[i * 3 + 1] - cy, dz = pos[i * 3 + 2] - cz;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d > r2) r2 = d;
+    }
+    return new Mesh(gl, data, indices, { cx, cy, cz, r: Math.sqrt(r2) });
   }
 }
 

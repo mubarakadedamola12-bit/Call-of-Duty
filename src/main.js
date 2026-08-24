@@ -6,7 +6,7 @@ import { Input } from './core/input.js';
 import { TouchControls } from './core/touch.js';
 import { Audio } from './core/audio.js';
 import { HUD } from './game/hud.js';
-import { Game } from './game/game.js';
+import { Game, DIFFICULTY } from './game/game.js';
 import { WEAPONS } from './game/weapons.js';
 import { clamp } from './core/math.js';
 
@@ -35,11 +35,26 @@ const defaultScale = IS_MOBILE ? 0.65 : 1;
 
 const settings = {
   scale: defaultScale, fov: IS_MOBILE ? 85 : 80, grain: 0.38, vol: 0.55,
+  // Render resolution is the single biggest cost lever: a 1440x860 window at
+  // devicePixelRatio 2 is a 5-megapixel deferred frame. 1.5 with FXAA on top
+  // is visually near-identical for roughly half the pixels.
+  dprCap: IS_MOBILE ? 2 : 1.5,
+  fpsCap: 60,
   primary: 'kilo', quality: defaultQuality,
   sens: 1.0,
+  adsSens: 0.85,
   lookAccel: 2.1,
+  invertY: false,
   aimAssist: IS_TOUCH ? 0.85 : 0,
+  difficulty: 'regular',
+  bloom: 0.55,
+  chroma: 0.13,
+  vignette: 0.58,
+  motionBlur: 1,
+  clouds: 0.55,
+  showFps: true,
 };
+const DEFAULTS = JSON.parse(JSON.stringify(settings));
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ob_settings') || '{}')); } catch { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('ob_settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
@@ -119,9 +134,8 @@ async function boot() {
   await frame();
   resize();
 
-  game = new Game(gl, renderer, audio, input, hud);
+  game = new Game(gl, renderer, audio, input, hud, settings.difficulty);
   game.touch = touch;
-  game.aimAssist = settings.aimAssist;
   setProgress(0.94, 'DEPLOYING SQUADS…');
   await frame();
   hud.buildMinimap(game.world);
@@ -147,10 +161,7 @@ const frame = () => new Promise((r) => {
 
 function resize() {
   readSafeInsets();
-  // Phones lie about devicePixelRatio for our purposes — 3x on a mid-range GPU
-  // is a slideshow, and the difference is invisible at arm's length.
-  const dprCap = IS_MOBILE ? 2 : 2;
-  const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+  const dpr = Math.min(window.devicePixelRatio || 1, settings.dprCap);
   const vv = window.visualViewport;
   const w = Math.round(vv ? vv.width : window.innerWidth);
   const h = Math.round(vv ? vv.height : window.innerHeight);
@@ -173,84 +184,247 @@ if (window.visualViewport) visualViewport.addEventListener('resize', () => { if 
 
 /* --------------------------------------------------------------- settings */
 
+/* ---------------------------------------------------------- settings page */
+
+/**
+ * One schema drives the whole options screen: the DOM, the live application,
+ * persistence and reset. Adding a setting means adding a row here, not wiring
+ * up another handler.
+ *
+ *   toUI/fromUI  translate between the stored value and the slider's integer
+ *   fmt          the readout text
+ *   apply        pushes the value into the live systems
+ *   only         'touch' | 'desktop' to hide irrelevant rows
+ */
+function schema() {
+  return [
+    ['GRAPHICS', [
+      { k: 'quality', label: 'Quality preset', type: 'select',
+        options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']],
+        hint: 'Shadow resolution, ambient occlusion, bloom detail and squad size.',
+        apply: (v) => renderer.setQuality(v) },
+      { k: 'dprCap', label: 'Render resolution', type: 'range', min: 75, max: 200, step: 25,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => v.toFixed(2) + '\u00d7',
+        hint: 'The biggest performance lever. Lower this first if the fans spin up.',
+        apply: () => resize() },
+      { k: 'scale', label: 'Resolution scale', type: 'range', min: 40, max: 100, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => Math.round(v * 100) + '%',
+        apply: () => resize() },
+      { k: 'fpsCap', label: 'Frame rate limit', type: 'select', num: true,
+        options: [[30, '30 FPS'], [60, '60 FPS'], [120, '120 FPS'], [0, 'Unlimited']],
+        hint: 'Capping saves a lot of power on a high-refresh display.' },
+      { k: 'fov', label: 'Field of view', type: 'range', min: 65, max: 115, step: 1,
+        fmt: (v) => String(v | 0), apply: (v) => { if (game) game.fovBase = v; } },
+      { k: 'bloom', label: 'Bloom', type: 'range', min: 0, max: 150, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => Math.round(v * 100) + '%',
+        apply: (v) => { renderer.bloomAmt = v; } },
+      { k: 'grain', label: 'Film grain', type: 'range', min: 0, max: 100, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => Math.round(v * 100) + '%',
+        apply: (v) => { renderer.grain = v * 0.10; } },
+      { k: 'chroma', label: 'Chromatic aberration', type: 'range', min: 0, max: 60, step: 2,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100,
+        fmt: (v) => (v < 0.005 ? 'OFF' : Math.round(v * 100) + '%'),
+        apply: (v) => { renderer.chroma = v; } },
+      { k: 'vignette', label: 'Vignette', type: 'range', min: 0, max: 120, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => Math.round(v * 100) + '%',
+        apply: (v) => { renderer.vignette = v; } },
+      { k: 'motionBlur', label: 'Motion blur', type: 'range', min: 0, max: 150, step: 10,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100,
+        fmt: (v) => (v < 0.05 ? 'OFF' : Math.round(v * 100) + '%'),
+        apply: (v) => { if (game) game.motionBlur = v; } },
+      { k: 'clouds', label: 'Cloud shadows', type: 'range', min: 0, max: 100, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100,
+        fmt: (v) => (v < 0.02 ? 'OFF' : Math.round(v * 100) + '%'),
+        apply: (v) => { renderer.cloudAmount = v; } },
+      { k: 'showFps', label: 'Show FPS', type: 'toggle',
+        apply: (v) => { $('fps').style.display = v ? '' : 'none'; } },
+    ]],
+
+    ['CONTROLS', [
+      { k: 'sens', label: 'Look sensitivity', type: 'range', min: 20, max: 450, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => v.toFixed(2) + '\u00d7',
+        apply: (v) => { input.sensitivity = Input.BASE_SENSITIVITY * v; } },
+      { k: 'adsSens', label: 'ADS sensitivity', type: 'range', min: 30, max: 150, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => v.toFixed(2) + '\u00d7',
+        hint: 'Multiplier applied on top while aiming down sights.',
+        apply: (v) => { if (game) game.adsSensMul = v; } },
+      { k: 'lookAccel', label: 'Look acceleration', type: 'range', min: 100, max: 350, step: 10,
+        only: 'touch', toUI: (v) => v * 100, fromUI: (v) => v / 100,
+        fmt: (v) => (v <= 1.02 ? 'OFF' : v.toFixed(1) + '\u00d7'),
+        hint: 'Fast swipes turn faster, so a 180 is one thumb motion.',
+        apply: (v) => { if (touch) touch.lookAccel = v; } },
+      { k: 'aimAssist', label: 'Aim assist', type: 'range', min: 0, max: 100, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100,
+        fmt: (v) => (v <= 0 ? 'OFF' : Math.round(v * 100) + '%'),
+        hint: 'Slows the reticle over a target and nudges toward it while firing.',
+        apply: (v) => { if (game) game.aimAssist = v; } },
+      { k: 'invertY', label: 'Invert vertical look', type: 'toggle',
+        apply: (v) => { input.invertY = v; } },
+    ]],
+
+    ['GAMEPLAY', [
+      { k: 'difficulty', label: 'Difficulty', type: 'select',
+        options: Object.keys(DIFFICULTY).map((k) => [k, DIFFICULTY[k].name]),
+        hint: 'Scales everyone\u2019s health (so firefights last longer), how much '
+            + 'damage you take, and how sharp the enemy AI is.',
+        apply: (v) => { if (game) game.applyDifficulty(v); } },
+    ]],
+
+    ['AUDIO', [
+      { k: 'vol', label: 'Master volume', type: 'range', min: 0, max: 100, step: 5,
+        toUI: (v) => v * 100, fromUI: (v) => v / 100, fmt: (v) => Math.round(v * 100) + '%',
+        apply: (v) => audio.setMasterVolume(v) },
+    ]],
+  ];
+}
+
+let SCHEMA = null;
+const rowVisible = (it) => !(it.only === 'touch' && !IS_TOUCH) && !(it.only === 'desktop' && IS_TOUCH);
+
+/** Pushes every stored setting into the live systems. */
 function applySettings() {
-  $('optScale').value = settings.scale * 100;
-  $('optScaleV').textContent = (settings.scale * 100 | 0) + '%';
-  $('optFov').value = settings.fov;
-  $('optFovV').textContent = settings.fov;
-  $('optGrain').value = settings.grain * 100;
-  $('optGrainV').textContent = (settings.grain * 100 | 0);
-  $('optSens').value = settings.sens * 100;
-  $('optSensV').textContent = settings.sens.toFixed(2);
-  $('optVol').value = settings.vol * 100;
-  $('optVolV').textContent = (settings.vol * 100 | 0);
-
-  renderer.grain = settings.grain * 0.10;
-  input.sensitivity = Input.BASE_SENSITIVITY * settings.sens;
-  if (touch) touch.lookAccel = settings.lookAccel;
-  audio.setMasterVolume(settings.vol);
-  if (game) { game.fovBase = settings.fov; game.aimAssist = settings.aimAssist; }
-
-  const qs = $('optQuality');
-  if (qs) {
-    qs.value = settings.quality;
-    $('optQualityV').textContent = settings.quality.toUpperCase();
+  if (!SCHEMA) SCHEMA = schema();
+  for (const [, items] of SCHEMA) {
+    for (const it of items) {
+      if (it.apply) { try { it.apply(settings[it.k]); } catch { /* not built yet */ } }
+    }
   }
-  const as = $('optAssist');
-  if (as) {
-    as.value = Math.round(settings.aimAssist * 100);
-    $('optAssistV').textContent = settings.aimAssist > 0
-      ? Math.round(settings.aimAssist * 100) + '%' : 'OFF';
-  }
-  const la = $('optAccel');
-  if (la) {
-    la.value = Math.round(settings.lookAccel * 100);
-    $('optAccelV').textContent = settings.lookAccel <= 1.02
-      ? 'OFF' : settings.lookAccel.toFixed(1) + '×';
-  }
+  refreshSettingsUI();
 }
 
-function bindSlider(id, key, fmt, onChange) {
-  const el = $(id), out = $(id + 'V');
-  el.addEventListener('input', () => {
-    const v = parseFloat(el.value);
-    settings[key] = onChange ? onChange(v) : v;
-    out.textContent = fmt(settings[key]);
-    saveSettings();
+function buildSettingsUI() {
+  if (!SCHEMA) SCHEMA = schema();
+  const tabs = $('settabs'), body = $('setbody');
+  if (!tabs || !body) return;
+  tabs.innerHTML = ''; body.innerHTML = '';
+
+  SCHEMA.forEach(([group, items], gi) => {
+    const tab = document.createElement('button');
+    tab.className = 'tab' + (gi === 0 ? ' on' : '');
+    tab.textContent = group;
+    tab.addEventListener('click', () => {
+      [...tabs.children].forEach((c) => c.classList.remove('on'));
+      [...body.children].forEach((c) => c.classList.remove('on'));
+      tab.classList.add('on');
+      body.children[gi].classList.add('on');
+      audio.uiClick();
+    });
+    tabs.appendChild(tab);
+
+    const panel = document.createElement('div');
+    panel.className = 'setgroup' + (gi === 0 ? ' on' : '');
+    for (const it of items) {
+      if (!rowVisible(it)) continue;
+      const row = document.createElement('label');
+      row.className = 'setrow';
+      const name = document.createElement('span');
+      name.textContent = it.label;
+      row.appendChild(name);
+
+      let ctrl, out = null;
+      if (it.type === 'select') {
+        ctrl = document.createElement('select');
+        for (const [val, text] of it.options) {
+          const o = document.createElement('option');
+          o.value = String(val); o.textContent = text;
+          ctrl.appendChild(o);
+        }
+        ctrl.addEventListener('change', () => {
+          settings[it.k] = it.num ? parseFloat(ctrl.value) : ctrl.value;
+          commit(it);
+        });
+      } else if (it.type === 'toggle') {
+        ctrl = document.createElement('input');
+        ctrl.type = 'checkbox';
+        ctrl.addEventListener('change', () => { settings[it.k] = ctrl.checked; commit(it); });
+      } else {
+        ctrl = document.createElement('input');
+        ctrl.type = 'range';
+        ctrl.min = it.min; ctrl.max = it.max; ctrl.step = it.step;
+        ctrl.addEventListener('input', () => {
+          const raw = parseFloat(ctrl.value);
+          settings[it.k] = it.fromUI ? it.fromUI(raw) : raw;
+          commit(it);
+        });
+        out = document.createElement('b');
+      }
+      row.appendChild(ctrl);
+      if (out) row.appendChild(out);
+      if (it.hint) {
+        const h = document.createElement('div');
+        h.className = 'hint2';
+        h.textContent = it.hint;
+        row.appendChild(h);
+      }
+      it._ctrl = ctrl; it._out = out;
+      panel.appendChild(row);
+    }
+    body.appendChild(panel);
   });
+  refreshSettingsUI();
 }
+
+function commit(it) {
+  if (it.apply) it.apply(settings[it.k]);
+  refreshRow(it);
+  saveSettings();
+}
+
+function refreshRow(it) {
+  const v = settings[it.k];
+  if (!it._ctrl) return;
+  if (it.type === 'select') it._ctrl.value = String(v);
+  else if (it.type === 'toggle') it._ctrl.checked = !!v;
+  else {
+    it._ctrl.value = String(it.toUI ? it.toUI(v) : v);
+    if (it._out) it._out.textContent = it.fmt ? it.fmt(v) : String(v);
+  }
+}
+
+function refreshSettingsUI() {
+  if (!SCHEMA) return;
+  for (const [, items] of SCHEMA) for (const it of items) refreshRow(it);
+  const el = $('matchsummary');
+  if (el) {
+    const d = DIFFICULTY[settings.difficulty] || DIFFICULTY.regular;
+    el.innerHTML = `Difficulty <b>${d.name}</b><br>`
+      + `Health <b>${Math.round(100 * d.healthScale)}</b> · `
+      + `Damage taken <b>${Math.round(d.damageTaken * 100)}%</b><br>`
+      + `Quality <b>${settings.quality.toUpperCase()}</b> · `
+      + `FPS cap <b>${settings.fpsCap || 'none'}</b>`;
+  }
+}
+
+function openSettings(fromPause) {
+  settingsReturn = fromPause ? 'pause' : 'menu';
+  $('menu').classList.add('hidden');
+  $('pause').classList.add('hidden');
+  $('settings').classList.remove('hidden');
+  refreshSettingsUI();
+}
+
+function closeSettings() {
+  $('settings').classList.add('hidden');
+  if (settingsReturn === 'pause') { $('pause').classList.remove('hidden'); updatePauseStats(); }
+  else $('menu').classList.remove('hidden');
+}
+
+let settingsReturn = 'menu';
+
+/* --------------------------------------------------------------------- UI */
 
 function initUI() {
-  bindSlider('optScale', 'scale', (v) => (v * 100 | 0) + '%', (v) => { const s = v / 100; settings.scale = s; resize(); return s; });
-  bindSlider('optFov', 'fov', (v) => String(v | 0), (v) => { if (game) game.fovBase = v; return v; });
-  bindSlider('optGrain', 'grain', (v) => String(v * 100 | 0), (v) => { const g = v / 100; renderer.grain = g * 0.10; return g; });
-  bindSlider('optSens', 'sens', (v) => v.toFixed(2), (v) => {
-    const s = v / 100; input.sensitivity = Input.BASE_SENSITIVITY * s; return s;
-  });
-  bindSlider('optVol', 'vol', (v) => String(v * 100 | 0), (v) => { const a = v / 100; audio.setMasterVolume(a); return a; });
+  buildSettingsUI();
 
-  const qs = $('optQuality');
-  if (qs) qs.addEventListener('change', () => {
-    settings.quality = qs.value;
-    $('optQualityV').textContent = settings.quality.toUpperCase();
-    renderer.setQuality(settings.quality);
+  $('opensettings').addEventListener('click', () => { audio.init(); openSettings(false); });
+  $('pausesettings').addEventListener('click', () => openSettings(true));
+  $('setback').addEventListener('click', () => { audio.uiClick(); closeSettings(); });
+  $('setreset').addEventListener('click', () => {
+    Object.assign(settings, JSON.parse(JSON.stringify(DEFAULTS)));
+    applySettings();
+    resize();
     saveSettings();
-  });
-  const la = $('optAccel');
-  if (la) la.addEventListener('input', () => {
-    settings.lookAccel = parseFloat(la.value) / 100;
-    $('optAccelV').textContent = settings.lookAccel <= 1.02
-      ? 'OFF' : settings.lookAccel.toFixed(1) + '×';
-    if (touch) touch.lookAccel = settings.lookAccel;
-    saveSettings();
-  });
-  const as = $('optAssist');
-  if (as) as.addEventListener('input', () => {
-    settings.aimAssist = parseFloat(as.value) / 100;
-    $('optAssistV').textContent = settings.aimAssist > 0
-      ? Math.round(settings.aimAssist * 100) + '%' : 'OFF';
-    if (game) game.aimAssist = settings.aimAssist;
-    saveSettings();
+    audio.uiClick();
   });
 
   $('deploy').addEventListener('click', deploy);
@@ -263,12 +437,11 @@ function initUI() {
     $('menu').classList.remove('hidden');
   });
   $('restart').addEventListener('click', () => {
-    game = new Game(gl, renderer, audio, input, hud);
+    game = new Game(gl, renderer, audio, input, hud, settings.difficulty);
     game.touch = touch;
-    game.aimAssist = settings.aimAssist;
-    game.fovBase = settings.fov;
     game.loadout[0] = settings.primary;
     hud.killfeed.length = 0;
+    applySettings();
     paused = false;
     $('pause').classList.add('hidden');
     deploy();
@@ -280,7 +453,8 @@ function initUI() {
       paused = false;
       $('pause').classList.add('hidden');
       $('menu').classList.add('hidden');
-    } else if (started && !paused && !IS_TOUCH) {
+      $('settings').classList.add('hidden');
+    } else if (started && !paused && !IS_TOUCH && $('settings').classList.contains('hidden')) {
       togglePause(true);
     }
   };
@@ -288,7 +462,7 @@ function initUI() {
   // Clicking the view re-acquires the mouse — pointer lock can be refused or
   // dropped by the browser, and a dead click would otherwise look like a hang.
   glCanvas.addEventListener('click', () => {
-    if (started && !input.locked && !IS_TOUCH) { audio.resume(); input.requestLock(); }
+    if (started && !input.locked && !IS_TOUCH && !paused) { audio.resume(); input.requestLock(); }
   });
 
   // Backgrounding the tab (or taking a call) should never cost you a life.
@@ -296,6 +470,7 @@ function initUI() {
     if (document.hidden && started && !paused) togglePause(true);
   });
 }
+
 
 function buildLoadoutUI() {
   const el = $('loadout');
@@ -355,6 +530,7 @@ function deploy() {
   if (game) { game.loadout[0] = settings.primary; game.fovBase = settings.fov; }
   $('menu').classList.add('hidden');
   $('pause').classList.add('hidden');
+  $('settings').classList.add('hidden');
   paused = false;
   started = true;
   if (touch) { touch.enabled = true; touch.releaseAll(); }
@@ -375,10 +551,22 @@ function updatePauseStats() {
 
 let last = performance.now();
 let fpsAcc = 0, fpsN = 0, fpsShown = 0;
+let nextFrame = 0;
+let menuAcc = 0;
 
 function loop(now) {
   requestAnimationFrame(loop);
   if (!running) return;
+
+  // Frame limiter. On a 120/144 Hz panel the browser will happily ask for
+  // twice the frames, which doubles GPU load for no visible benefit.
+  if (settings.fpsCap > 0) {
+    const minDelta = 1000 / settings.fpsCap - 1.5;   // small slack for jitter
+    if (now < nextFrame) return;
+    nextFrame = Math.max(now + minDelta, nextFrame + minDelta);
+    if (nextFrame < now) nextFrame = now + minDelta;
+  }
+
   let dt = (now - last) / 1000;
   last = now;
   if (dt > 0.1) dt = 0.1;
@@ -398,10 +586,16 @@ function loop(now) {
 
   if (active) game.update(dt);
   else if (!started) {
-    // Briefing screen: keep the firefight running behind the menu.
-    game.hud.update(dt);
-    game.updateBots(dt);
-    game.updateProjectiles(dt);
+    // Briefing screen: keep the firefight running behind the menu, but at a
+    // quarter rate — nobody is aiming at it, and it should not cost a full
+    // simulation while the player reads the controls.
+    menuAcc += dt;
+    if (menuAcc >= 1 / 15) {
+      game.hud.update(menuAcc);
+      game.updateBots(menuAcc);
+      game.updateProjectiles(menuAcc);
+      menuAcc = 0;
+    }
   }
   // Paused mid-match: everything is frozen, we only keep drawing.
 

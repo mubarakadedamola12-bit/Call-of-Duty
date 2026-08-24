@@ -22,27 +22,43 @@ const M = {
   glass: { layer: MAT.GLASSDIRT, uvScale: [2, 2], tint: [1, 1, 1], rough: 0.25, metal: 0.9 },
 };
 
+/**
+ * A whole weapon is one mesh: the metal / polymer / wood / glass differences
+ * ride along per-vertex, so a gun costs a single draw call instead of five.
+ * Emissive parts are the exception — those still need their own draw.
+ */
 class GunParts {
-  constructor() { this.b = new Map(); }
-  get(name) {
-    let e = this.b.get(name);
-    if (!e) {
-      const mat = defaultMaterial();
-      Object.assign(mat, M[name]);
-      e = { builder: new Builder(), mat };
-      this.b.set(name, e);
+  constructor() {
+    this.b = new Builder();
+    this.glow = new Map();
+  }
+  _vm(name) {
+    const d = M[name];
+    return { layer: d.layer, tint: d.tint || [1, 1, 1], uv: d.uvScale[0] };
+  }
+  _add(name, geo, uvS) {
+    const v = this._vm(name);
+    if (M[name].emissive) {
+      let e = this.glow.get(name);
+      if (!e) {
+        const mat = defaultMaterial();
+        Object.assign(mat, M[name]);
+        e = { builder: new Builder(), mat };
+        this.glow.set(name, e);
+      }
+      e.builder.add(geo, _x, uvS);
+      return this;
     }
-    return e.builder;
+    this.b.add(geo, _x, uvS * v.uv, [0, 0], { layer: v.layer, tint: v.tint });
+    return this;
   }
   box(name, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0, uvS = 1) {
     M4.compose(_x, x, y, z, rx, ry, rz);
-    this.get(name).add(boxGeo(w, h, d), _x, uvS);
-    return this;
+    return this._add(name, boxGeo(w, h, d), uvS);
   }
   cyl(name, r, h, x, y, z, rx = 0, ry = 0, rz = 0, seg = 14, rTop = null) {
     M4.compose(_x, x, y, z, rx, ry, rz);
-    this.get(name).add(cylinderGeo(r, h, seg, true, rTop), _x, 1);
-    return this;
+    return this._add(name, cylinderGeo(r, h, seg, true, rTop), 1);
   }
   /** Cylinder oriented along -Z (barrels, tubes, suppressors). */
   tube(name, r, len, x, y, z, seg = 14, rTop = null) {
@@ -50,12 +66,16 @@ class GunParts {
   }
   sph(name, r, x, y, z, sx = 1, sy = 1, sz = 1) {
     M4.compose(_x, x, y, z, 0, 0, 0, sx, sy, sz);
-    this.get(name).add(sphereGeo(r, 12, 8), _x, 1);
-    return this;
+    return this._add(name, sphereGeo(r, 12, 8), 1);
   }
   build(gl) {
     const out = [];
-    for (const [, e] of this.b) {
+    if (this.b.idx.length) {
+      const mat = defaultMaterial();
+      mat.uvScale = [1, 1]; mat.rough = 1; mat.metal = 1;
+      out.push({ mesh: this.b.build(gl), mat });
+    }
+    for (const [, e] of this.glow) {
       if (e.builder.idx.length) out.push({ mesh: e.builder.build(gl), mat: e.mat });
     }
     return out;

@@ -16,36 +16,49 @@ const PARTMAT = {
   glass: { layer: MAT.GLASSDIRT, uvScale: [2, 2], tint: [1.6, 1.4, 1.0], rough: 0.30, metal: 1 },
 };
 
-function partBuilder() {
-  const map = new Map();
+/**
+ * Builds one body part as a SINGLE mesh, with the per-material differences
+ * baked into per-vertex layer/tint. A rig drawn material-by-material cost ~28
+ * draw calls per soldier, times three passes, times nine bots — which was most
+ * of the frame. This makes it one draw per bone instead.
+ */
+function partBuilder(camoTint) {
+  const b = new Builder();
+  const vm = (name) => {
+    const d = PARTMAT[name];
+    // Team colour is baked into the fatigues at build time rather than applied
+    // as a draw uniform, because the whole bone is now a single mesh.
+    if (name === 'camo' && camoTint) return { layer: d.layer, tint: camoTint };
+    return { layer: d.layer, tint: d.tint || [1, 1, 1] };
+  };
+  const uvOf = (name) => PARTMAT[name].uvScale[0];
+  const m = m4();
   const api = {
     box(name, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0, uvS = 1) {
-      const b = get(name); const m = m4();
-      M4.compose(m, x, y, z, rx, ry, rz); b.add(boxGeo(w, h, d), m, uvS); return api;
+      M4.compose(m, x, y, z, rx, ry, rz);
+      b.add(boxGeo(w, h, d), m, uvS * uvOf(name), [0, 0], vm(name)); return api;
     },
     sph(name, r, x, y, z, sx = 1, sy = 1, sz = 1, uvS = 1) {
-      const b = get(name); const m = m4();
-      M4.compose(m, x, y, z, 0, 0, 0, sx, sy, sz); b.add(sphereGeo(r, 14, 10), m, uvS); return api;
+      M4.compose(m, x, y, z, 0, 0, 0, sx, sy, sz);
+      b.add(sphereGeo(r, 14, 10), m, uvS * uvOf(name), [0, 0], vm(name)); return api;
     },
     cap(name, r, h, x, y, z, rx = 0, ry = 0, rz = 0) {
-      const b = get(name); const m = m4();
-      M4.compose(m, x, y, z, rx, ry, rz); b.add(capsuleGeo(r, h, 12, 8), m, 1); return api;
+      M4.compose(m, x, y, z, rx, ry, rz);
+      b.add(capsuleGeo(r, h, 12, 8), m, uvOf(name), [0, 0], vm(name)); return api;
     },
     cyl(name, r, h, x, y, z, rx = 0, ry = 0, rz = 0, seg = 12) {
-      const b = get(name); const m = m4();
-      M4.compose(m, x, y, z, rx, ry, rz); b.add(cylinderGeo(r, h, seg), m, 1); return api;
+      M4.compose(m, x, y, z, rx, ry, rz);
+      b.add(cylinderGeo(r, h, seg), m, uvOf(name), [0, 0], vm(name)); return api;
     },
     build(gl) {
-      const out = [];
-      for (const [name, b] of map) {
-        const mat = defaultMaterial();
-        Object.assign(mat, PARTMAT[name]);
-        out.push({ mesh: b.build(gl), mat, name });
-      }
-      return out;
+      // uvScale is already folded into the vertex UVs, so the shared material
+      // only has to carry the shading constants.
+      const mat = defaultMaterial();
+      mat.uvScale = [1, 1];
+      mat.rough = 1; mat.metal = 1;
+      return [{ mesh: b.build(gl), mat, name: 'body' }];
     },
   };
-  function get(n) { let b = map.get(n); if (!b) { b = new Builder(); map.set(n, b); } return b; }
   return api;
 }
 
@@ -53,11 +66,13 @@ function partBuilder() {
  * Body parts are modelled around their joint pivot so the animation code can
  * just rotate them. Rig is: pelvis -> torso -> head, and limbs off those.
  */
-export function buildSoldier(gl) {
+/** @param camoTint per-team fatigue colour, baked into the mesh. */
+export function buildSoldier(gl, camoTint) {
   const parts = {};
+  const partBuilderT = () => partBuilder(camoTint);
 
   // --- torso (pivot at the waist)
-  let p = partBuilder();
+  let p = partBuilderT();
   p.box('camo', 0.40, 0.30, 0.23, 0, 0.16, 0);
   p.box('camo', 0.44, 0.20, 0.25, 0, 0.40, 0);
   p.box('gear', 0.42, 0.30, 0.27, 0, 0.24, 0.005, 0, 0, 0, 1.6);        // plate carrier
@@ -72,7 +87,7 @@ export function buildSoldier(gl) {
   parts.torso = p.build(gl);
 
   // --- head (pivot at the neck)
-  p = partBuilder();
+  p = partBuilderT();
   p.sph('gear', 0.107, 0, 0.115, 0.005, 1.06, 1.16, 1.14, 2.0);          // helmet
   p.box('gear', 0.215, 0.045, 0.10, 0, 0.115, -0.085, 0.28, 0, 0, 2.5);  // brim
   p.sph('camo', 0.093, 0, 0.10, 0, 1, 1.10, 1.02, 2.5);                  // balaclava
@@ -84,39 +99,39 @@ export function buildSoldier(gl) {
   parts.head = p.build(gl);
 
   // --- upper arm (pivot at shoulder, extends -Y)
-  p = partBuilder();
+  p = partBuilderT();
   p.cap('camo', 0.058, 0.13, 0, -0.105, 0);
   p.box('gear', 0.105, 0.075, 0.098, 0, -0.020, 0, 0, 0, 0, 2.2);        // shoulder pad
   parts.upperArm = p.build(gl);
 
   // --- lower arm + glove
-  p = partBuilder();
+  p = partBuilderT();
   p.cap('camo', 0.049, 0.115, 0, -0.095, 0);
   p.box('gear', 0.075, 0.070, 0.062, 0, -0.190, 0, 0, 0, 0, 2.6);
   parts.lowerArm = p.build(gl);
 
   // --- thigh
-  p = partBuilder();
+  p = partBuilderT();
   p.cap('camo', 0.077, 0.17, 0, -0.135, 0);
   p.box('gearTan', 0.10, 0.11, 0.055, 0.055, -0.165, 0, 0, 0, 0, 3);     // drop pouch
   parts.thigh = p.build(gl);
 
   // --- shin + boot
-  p = partBuilder();
+  p = partBuilderT();
   p.cap('camo', 0.062, 0.16, 0, -0.125, 0);
   p.box('gear', 0.098, 0.075, 0.235, 0, -0.245, -0.035, 0, 0, 0, 2.2);   // boot
   p.box('gear', 0.104, 0.030, 0.245, 0, -0.278, -0.035, 0, 0, 0, 2.6);   // sole
   parts.shin = p.build(gl);
 
   // --- pelvis
-  p = partBuilder();
+  p = partBuilderT();
   p.box('camo', 0.32, 0.19, 0.21, 0, -0.06, 0);
   p.box('gearTan', 0.35, 0.075, 0.23, 0, 0.01, 0, 0, 0, 0, 2.2);         // belt
   p.box('gear', 0.075, 0.11, 0.05, 0.155, -0.06, 0.02, 0, 0, 0, 3);      // holster
   parts.pelvis = p.build(gl);
 
   // --- team marker (emissive strip on the shoulder)
-  p = partBuilder();
+  p = partBuilderT();
   p.box('metal', 0.11, 0.035, 0.09, 0, 0, 0);
   parts.marker = p.build(gl);
 
@@ -332,8 +347,10 @@ export function drawSoldier(renderer, parts, actor, teamMat, time) {
   const deathPitch = dead ? anim.deathPitch : 0;
   const deathRoll = dead ? anim.deathRoll : 0;
 
+  // One draw per bone. Team colour rides on the shared material's tint, which
+  // multiplies the per-vertex tint baked into the mesh.
   const draw = (list, mx) => {
-    for (const part of list) renderer.draw(part.mesh, mx, part.name === 'camo' ? teamMat.camo : part.mat, true);
+    for (const part of list) renderer.draw(part.mesh, mx, teamMat.body, true);
   };
 
   // Pelvis

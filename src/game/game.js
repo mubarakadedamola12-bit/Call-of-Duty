@@ -50,13 +50,28 @@ const MOVE = {
   sprintOut: 0.15,     // delay from dropping sprint to being able to fire
 };
 
+/**
+ * Difficulty presets. `healthScale` lengthens time-to-kill for *everyone*, so
+ * firefights stop being decided in a quarter of a second; `damageTaken` is the
+ * extra allowance the player gets on top; `botSkill` drives enemy reaction
+ * time and aim convergence.
+ */
+export const DIFFICULTY = {
+  recruit: { name: 'RECRUIT', healthScale: 1.9, damageTaken: 0.55, botSkill: 0.42, regen: 2.4, regenRate: 55 },
+  regular: { name: 'REGULAR', healthScale: 1.5, damageTaken: 0.78, botSkill: 0.62, regen: 3.1, regenRate: 48 },
+  hardened: { name: 'HARDENED', healthScale: 1.2, damageTaken: 1.0, botSkill: 0.84, regen: 4.0, regenRate: 42 },
+  veteran: { name: 'VETERAN', healthScale: 1.0, damageTaken: 1.15, botSkill: 1.0, regen: 5.0, regenRate: 36 },
+};
+
 export const STREAKS = [
   { at: 3, name: 'UAV', key: '[4]', id: 'uav' },
   { at: 5, name: 'AIRSTRIKE', key: '[5]', id: 'strike' },
 ];
 
 export class Game {
-  constructor(gl, renderer, audio, input, hud) {
+  constructor(gl, renderer, audio, input, hud, difficulty = 'regular') {
+    this.diff = { ...(DIFFICULTY[difficulty] || DIFFICULTY.regular) };
+    this.difficultyKey = DIFFICULTY[difficulty] ? difficulty : 'regular';
     this.gl = gl; this.renderer = renderer; this.audio = audio;
     this.input = input; this.hud = hud;
 
@@ -64,14 +79,21 @@ export class Game {
     this.worldMeshes = this.world.upload(gl);
     this.fx = new FX(this.world);
     this.weapons = buildAllWeapons(gl);
-    this.soldier = buildSoldier(gl);
+    // One baked rig per team — see buildSoldier().
+    this.soldiers = [
+      buildSoldier(gl, [0.72, 0.86, 1.25]),
+      buildSoldier(gl, [1.30, 0.86, 0.70]),
+    ];
     this.vm = new Viewmodel(buildHands(gl));
     this.nav = new NavAgent(this.world);
 
+    // The rig itself carries its materials per-vertex; these only supply the
+    // shading constants and the emissive team marker.
+    const bodyMat = () => this._mat({ uvScale: [1, 1], rough: 1, metal: 1 });
     this.teamMat = [
-      { camo: this._mat({ layer: MAT.FATIGUES, uvScale: [2.2, 2.2], tint: [0.72, 0.86, 1.25] }),
+      { body: bodyMat(),
         marker: this._mat({ layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.1, 0.1, 0.1], emissive: [0.25, 1.4, 3.4] }) },
-      { camo: this._mat({ layer: MAT.FATIGUES, uvScale: [2.2, 2.2], tint: [1.30, 0.86, 0.70] }),
+      { body: bodyMat(),
         marker: this._mat({ layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.1, 0.1, 0.1], emissive: [3.6, 0.35, 0.18] }) },
     ];
 
@@ -79,7 +101,7 @@ export class Game {
     this.player = {
       pos: v3(0, 0, 0), vel: v3(0, 0, 0), radius: 0.34, height: 1.72,
       yaw: 0, pitch: 0, grounded: true, crouchAmt: 0, dead: false,
-      health: 100, maxHealth: 100, regenDelay: 0,
+      health: 100 * this.diff.healthScale, maxHealth: 100 * this.diff.healthScale, regenDelay: 0,
       anim: { speed: 0, phase: 0, bob: 0, deathPitch: 0, deathRoll: 0, deathDrop: 0 },
       team: 0, name: 'YOU', isPlayer: true,
     };
@@ -104,6 +126,8 @@ export class Game {
     this.assistSlow = 1;
     this.assistTarget = null;
     this.touch = null;
+    this.adsSensMul = 0.85;   // extra look scaling while aiming
+    this.motionBlur = 1;      // 0 disables the sprint / ADS blur entirely
 
     this.loadout = ['kilo', 'pistol'];
     this.slot = 0;
@@ -140,9 +164,15 @@ export class Game {
     // Squad size scales with the render tier — mobile runs fewer actors.
     const total = clamp(renderer.q ? renderer.q.bots : 9, 4, 12);
     const allies = Math.floor(total / 2);
+    const sk = this.diff.botSkill;
     this.bots = [];
-    for (let i = 0; i < allies; i++) this.bots.push(new Bot(this.world, 0, 0.72 + i * 0.05));
-    for (let i = 0; i < total - allies; i++) this.bots.push(new Bot(this.world, 1, 0.80 + i * 0.05));
+    for (let i = 0; i < allies; i++) this.bots.push(new Bot(this.world, 0, clamp((0.72 + i * 0.05) * sk, 0.1, 1)));
+    for (let i = 0; i < total - allies; i++) this.bots.push(new Bot(this.world, 1, clamp((0.80 + i * 0.05) * sk, 0.1, 1)));
+    for (const b of this.bots) {
+      b.baseSkill = b.difficulty / sk;
+      b.maxHealth = 100 * this.diff.healthScale;
+      b.health = b.maxHealth;
+    }
 
     this.time = 0;
     this.camWorld = m4();
@@ -163,6 +193,24 @@ export class Game {
 
   get weapon() { return this.weapons[this.loadout[this.slot]]; }
   get weaponId() { return this.loadout[this.slot]; }
+
+  /** Swaps difficulty mid-match, rescaling everyone's health proportionally. */
+  applyDifficulty(key) {
+    const d = DIFFICULTY[key];
+    if (!d) return;
+    const k = d.healthScale / this.diff.healthScale;
+    this.diff = { ...d };
+    this.difficultyKey = key;
+    const rescale = (a) => {
+      a.maxHealth *= k;
+      a.health = Math.min(a.maxHealth, a.health * k);
+    };
+    rescale(this.player);
+    for (const b of this.bots) {
+      rescale(b);
+      b.difficulty = clamp((b.baseSkill || 0.8) * d.botSkill, 0.1, 1);
+    }
+  }
 
   /* ------------------------------------------------------------- spawning */
 
@@ -407,11 +455,14 @@ export class Game {
     if (a.dead) return;
     if (a.isPlayer && this.spawnProtect > 0) return;
     if (!a.isPlayer && a.spawnProtect > 0) return;
+
+    // The player's allowance is applied before the hit lands, not unwound after.
+    if (a.isPlayer) dmg *= this.diff.damageTaken;
     a.health -= dmg;
 
     if (a.isPlayer) {
-      this.player.regenDelay = 4.2;
-      this.renderer.damage = Math.min(1, this.renderer.damage + dmg / 90);
+      this.player.regenDelay = this.diff.regen;
+      this.renderer.damage = Math.min(1, this.renderer.damage + dmg / (90 * this.diff.healthScale));
       this.aimPunchP += rand(-0.02, 0.03);
       this.aimPunchY += rand(-0.025, 0.025);
       if (from) this.hud.addDamageDir(Math.atan2(-(from[0] - a.pos[0]), -(from[2] - a.pos[2])));
@@ -487,7 +538,10 @@ export class Game {
 
     // --- look
     if (inp.active && !p.dead) {
-      const zoom = this.adsAmt > 0.5 ? lerp(1, this.weapon.adsFov, 0.85) : 1;
+      // Scale look with the optical zoom so aiming tracks at the same angular
+      // rate, blended over the transition rather than snapping at the midpoint.
+      const optical = lerp(1, this.weapon.adsFov, 0.85) * this.adsSensMul;
+      const zoom = lerp(1, optical, smoothstep(0, 1, this.adsAmt));
       // Aim-assist "slowdown": the reticle drags as it crosses a target.
       const sens = inp.sensitivity * zoom * this.assistSlow;
       p.yaw -= inp.mouse.dx * sens;
@@ -739,7 +793,9 @@ export class Game {
 
     // --- health regen
     if (p.regenDelay > 0) p.regenDelay -= dt;
-    else if (p.health < p.maxHealth) p.health = Math.min(p.maxHealth, p.health + 42 * dt);
+    else if (p.health < p.maxHealth) {
+      p.health = Math.min(p.maxHealth, p.health + this.diff.regenRate * dt);
+    }
     if (this.spawnProtect > 0) this.spawnProtect -= dt;
 
     this.updateWeapon(dt);
@@ -873,9 +929,10 @@ export class Game {
 
     // Peripheral blur while aiming + speed blur while sprinting. A telescopic
     // sight shows a real optical image, so it stays sharp.
-    this.renderer.adsBlur = w.scope ? this.adsAmt * 0.12 : this.adsAmt * 0.55;
+    this.renderer.adsBlur = (w.scope ? this.adsAmt * 0.12 : this.adsAmt * 0.55) * this.motionBlur;
     this.renderer.speedBlur = damp(this.renderer.speedBlur,
-      this.slide > 0.5 ? 0.50 : this.sprinting ? (this.tacSprint ? 0.60 : 0.30) : 0, 8, dt);
+      (this.slide > 0.5 ? 0.50 : this.sprinting ? (this.tacSprint ? 0.60 : 0.30) : 0) * this.motionBlur,
+      8, dt);
 
     // Viewmodel push-back near walls.
     const cam = this._eye, dir = this._dir;
@@ -1322,7 +1379,8 @@ export class Game {
     const r = this.renderer;
     r.damage = Math.max(0, r.damage - dt * 2.2);
     r.flash = Math.max(0, r.flash - dt * 1.9);
-    r.hurt = damp(r.hurt, this.player.dead ? 0.9 : clamp(1 - this.player.health / 45, 0, 1), 5, dt);
+    r.hurt = damp(r.hurt, this.player.dead
+      ? 0.9 : clamp(1 - this.player.health / (45 * this.diff.healthScale), 0, 1), 5, dt);
     this.hud.update(dt);
   }
 
@@ -1353,11 +1411,11 @@ export class Game {
       if (b.dead && b.deadTime > 4.6) continue;
       const d = V3.dist(cam.eye, b.pos);
       if (d > 110) continue;
-      drawSoldier(r, this.soldier, b, this.teamMat[b.team], this.time);
+      drawSoldier(r, this.soldiers[b.team], b, this.teamMat[b.team], this.time);
       if (!b.dead) this.drawBotWeapon(b);
     }
     if (this.player.dead) {
-      drawSoldier(r, this.soldier, this.player, this.teamMat[this.player.team], this.time);
+      drawSoldier(r, this.soldiers[this.player.team], this.player, this.teamMat[this.player.team], this.time);
     }
 
     // Grenades in flight.

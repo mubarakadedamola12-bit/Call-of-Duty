@@ -417,6 +417,33 @@ export async function buildMaterialArrays(gl, onProgress) {
   return { albedo: mk(albedo, true), surf: mk(surf, false) };
 }
 
+/**
+ * Tileable cloud-cover map, sampled in the lighting pass to break the sun into
+ * drifting light and shade. Baked once rather than evaluated as FBM per pixel:
+ * two texture fetches cost far less than ten octaves of noise at 2.7 megapixels.
+ */
+export function makeCloudTex(gl) {
+  const N = 256, d = new Uint8Array(N * N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const u = (x / N) * 8, v = (y / N) * 8;
+      let n = fbm(u, v, 8, 5) * 0.65 + fbm(u * 2.7, v * 2.7, 22, 3) * 0.35;
+      n = sat(n * 1.7 + 0.5);
+      // Push toward broken cumulus rather than an even haze.
+      d[y * N + x] = sat(Math.pow(n, 1.5) * 1.25) * 255;
+    }
+  }
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, d);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  return t;
+}
+
 /** 64x64 RGBA blue-noise-ish tile used for dithering, SSAO rotation and PCF. */
 export function makeNoiseTex(gl) {
   const N = 64, d = new Uint8Array(N * N * 4);

@@ -80,30 +80,26 @@
       <div class="card">
         <h3>LOADOUT</h3>
         <div class="loadout" id="loadout"></div>
-        <h3 class="mt">GRAPHICS</h3>
-        <label class="row"><span>Quality</span>
-          <select id="optQuality">
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select><b id="optQualityV">HIGH</b></label>
-        <label class="row"><span>Resolution scale</span>
-          <input id="optScale" type="range" min="40" max="100" step="5" value="100"><b id="optScaleV">100%</b></label>
-        <label class="row"><span>Field of view</span>
-          <input id="optFov" type="range" min="65" max="110" step="1" value="80"><b id="optFovV">80</b></label>
-        <label class="row"><span>Film grain</span>
-          <input id="optGrain" type="range" min="0" max="100" step="5" value="38"><b id="optGrainV">38</b></label>
-        <label class="row"><span>Sensitivity</span>
-          <input id="optSens" type="range" min="20" max="450" step="5" value="100"><b id="optSensV">1.00</b></label>
-        <label class="row touchonly"><span>Look accel</span>
-          <input id="optAccel" type="range" min="100" max="350" step="10" value="210"><b id="optAccelV">2.1×</b></label>
-        <label class="row"><span>Volume</span>
-          <input id="optVol" type="range" min="0" max="100" step="5" value="55"><b id="optVolV">55</b></label>
-        <label class="row"><span>Aim assist</span>
-          <input id="optAssist" type="range" min="0" max="100" step="5" value="0"><b id="optAssistV">OFF</b></label>
+        <h3 class="mt">MATCH</h3>
+        <div class="summary" id="matchsummary"></div>
+        <button id="opensettings" class="wide">SETTINGS</button>
       </div>
     </div>
     <div class="foot" id="gpuinfo"></div>
+  </section>
+
+  <!-- --------------------------------------------------------- SETTINGS -->
+  <section id="settings" class="screen hidden">
+    <div class="brand small">
+      <div class="tag">OPTIONS</div>
+      <h1>SETTINGS</h1>
+    </div>
+    <div class="tabs" id="settabs"></div>
+    <div class="setbody" id="setbody"></div>
+    <div class="panel wide-panel">
+      <button id="setback" class="primary">BACK</button>
+      <button id="setreset">RESET DEFAULTS</button>
+    </div>
   </section>
 
   <!-- ------------------------------------------------------------ PAUSE -->
@@ -111,6 +107,7 @@
     <h2>PAUSED</h2>
     <div class="panel">
       <button id="resume" class="primary">RESUME</button>
+      <button id="pausesettings">SETTINGS</button>
       <button id="restart">RESTART MATCH</button>
       <button id="tomenu">BRIEFING</button>
     </div>

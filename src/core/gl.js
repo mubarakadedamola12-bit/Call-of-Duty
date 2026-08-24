@@ -57,11 +57,30 @@ export class Program {
     this._unit = 0;
   }
   use() { this.gl.useProgram(this.p); this._unit = 0; return this; }
-  i(n, v) { const l = this.u[n]; if (l) this.gl.uniform1i(l, v); return this; }
-  f(n, v) { const l = this.u[n]; if (l) this.gl.uniform1f(l, v); return this; }
-  f2(n, a, b) { const l = this.u[n]; if (l) this.gl.uniform2f(l, a, b); return this; }
-  f3(n, a, b, c) { const l = this.u[n]; if (l) this.gl.uniform3f(l, a, b, c); return this; }
-  f4(n, a, b, c, d) { const l = this.u[n]; if (l) this.gl.uniform4f(l, a, b, c, d); return this; }
+  // A stray `undefined` uploads as NaN and silently poisons everything it
+  // touches downstream, so scalars are validated on the way in.
+  _num(n, v) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (!this._warned) this._warned = new Set();
+    if (!this._warned.has(n)) {
+      this._warned.add(n);
+      console.error(`[${this.label}] uniform ${n} got a non-finite value:`, v);
+    }
+    return 0;
+  }
+  i(n, v) { const l = this.u[n]; if (l) this.gl.uniform1i(l, this._num(n, v) | 0); return this; }
+  f(n, v) { const l = this.u[n]; if (l) this.gl.uniform1f(l, this._num(n, v)); return this; }
+  f2(n, a, b) { const l = this.u[n]; if (l) this.gl.uniform2f(l, this._num(n, a), this._num(n, b)); return this; }
+  f3(n, a, b, c) {
+    const l = this.u[n];
+    if (l) this.gl.uniform3f(l, this._num(n, a), this._num(n, b), this._num(n, c));
+    return this;
+  }
+  f4(n, a, b, c, d) {
+    const l = this.u[n];
+    if (l) this.gl.uniform4f(l, this._num(n, a), this._num(n, b), this._num(n, c), this._num(n, d));
+    return this;
+  }
   v3(n, v) { const l = this.u[n]; if (l) this.gl.uniform3fv(l, v); return this; }
   v3a(n, v) { const l = this.u[n]; if (l) this.gl.uniform3fv(l, v); return this; }
   v4a(n, v) { const l = this.u[n]; if (l) this.gl.uniform4fv(l, v); return this; }
@@ -85,12 +104,24 @@ export class Program {
   }
 }
 
-/** Interleaved static mesh: pos(3) nrm(3) uv(2) tan(4) = 12 floats/vertex. */
-export const STRIDE = 12;
+/**
+ * Interleaved static mesh:
+ *   pos(3) nrm(3) uv(2) tan(4) layer(1) tint(3) = 16 floats/vertex.
+ *
+ * `layer` and `tint` are per-vertex so several materials can live in ONE mesh
+ * and therefore one draw call. A negative layer means "use the uniform", which
+ * keeps single-material meshes exactly as they were.
+ */
+export const STRIDE = 16;
 
 export class Mesh {
-  constructor(gl, data, indices) {
+  /** @param bounds optional {cx,cy,cz,r} local-space bounding sphere for culling */
+  constructor(gl, data, indices, bounds) {
     this.gl = gl;
+    this.bx = bounds ? bounds.cx : 0;
+    this.by = bounds ? bounds.cy : 0;
+    this.bz = bounds ? bounds.cz : 0;
+    this.br = bounds ? bounds.r : 1e9;   // no bounds -> never culled
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     this.vbo = gl.createBuffer();
@@ -101,6 +132,8 @@ export class Mesh {
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, s, 12);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, s, 24);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, s, 32);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, s, 48);
+    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 3, gl.FLOAT, false, s, 52);
     this.ibo = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);

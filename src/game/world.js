@@ -117,6 +117,8 @@ export class World {
     barrel: { key: 'barrel', layer: MAT.RUSTBARREL, uvScale: [0.55, 0.55] },
     brick: { key: 'brick', layer: MAT.BRICK, uvScale: [0.26, 0.26], macro: 0.28 },
     tarp: { key: 'tarp', layer: MAT.TARP, uvScale: [0.45, 0.45] },
+    stain: { key: 'stain', layer: MAT.ASPHALT, uvScale: [0.55, 0.55], tint: [0.30, 0.28, 0.26], rough: 0.55, macro: 0.5 },
+    sandPatch: { key: 'sandPatch', layer: MAT.SAND, uvScale: [0.22, 0.22], tint: [0.78, 0.74, 0.70], macro: 0.9 },
     glass: { key: 'glass', layer: MAT.GLASSDIRT, uvScale: [0.4, 0.4], rough: 1, metal: 1 },
   };
 
@@ -278,6 +280,60 @@ export class World {
     this.lights.push({ x, y: 1.05, z, r: 8.5, col: [1.0, 0.52, 0.20], i: 6.0, flicker: true });
     this.fires = this.fires || [];
     this.fires.push({ x, y: 0.92, z });
+  }
+
+  /** Sagging cable between two points — catenary, in segments. */
+  addCable(x0, y0, z0, x1, y1, z1, sag = 0.6, seg = 10, r = 0.022) {
+    const m = World.M.steelDark;
+    let px = x0, py = y0, pz = z0;
+    for (let i = 1; i <= seg; i++) {
+      const t = i / seg;
+      const nx = x0 + (x1 - x0) * t;
+      const nz = z0 + (z1 - z0) * t;
+      // Catenary approximation: parabolic dip, deepest at mid-span.
+      const ny = y0 + (y1 - y0) * t - Math.sin(t * Math.PI) * sag;
+      const dx = nx - px, dy = ny - py, dz = nz - pz;
+      const len = Math.hypot(dx, dy, dz);
+      const yaw = Math.atan2(dx, dz);
+      const pitch = Math.asin(clamp(dy / (len || 1), -1, 1));
+      this.deco(m, cylinderGeo(r, len, 5),
+        (px + nx) / 2, (py + ny) / 2, (pz + nz) / 2,
+        Math.PI / 2 - pitch, yaw, 0);
+      px = nx; py = ny; pz = nz;
+    }
+  }
+
+  /** Run of pipework along a wall, with support brackets. */
+  addPipeRun(x, y, z, ry, len, r = 0.09) {
+    const m = World.M.steelDark;
+    const c = Math.cos(ry), s = Math.sin(ry);
+    this.deco(m, cylinderGeo(r, len, 10), x, y, z, Math.PI / 2, ry + Math.PI / 2, 0);
+    this.deco(m, cylinderGeo(r * 0.62, len, 8), x, y - r * 2.4, z, Math.PI / 2, ry + Math.PI / 2, 0);
+    const n = Math.max(2, Math.round(len / 3.2));
+    for (let i = 0; i <= n; i++) {
+      const t = (i / n - 0.5) * len;
+      this.deco(m, boxGeo(0.10, 0.34, 0.06), x + c * t, y - r * 1.2, z + s * t, 0, ry, 0, 1, 1, 1, 2);
+      this.deco(m, cylinderGeo(r * 1.25, 0.05, 10), x + c * t, y, z + s * t, Math.PI / 2, ry + Math.PI / 2, 0);
+    }
+  }
+
+  /** Wall-mounted ladder — decoration only, not climbable. */
+  addLadder(x, y, z, ry, h) {
+    const m = World.M.steelDark;
+    const c = Math.cos(ry), s = Math.sin(ry);
+    for (const sgn of [-1, 1]) {
+      this.deco(m, cylinderGeo(0.030, h, 6), x + c * sgn * 0.22, y + h / 2, z + s * sgn * 0.22);
+    }
+    const rungs = Math.floor(h / 0.30);
+    for (let i = 1; i < rungs; i++) {
+      this.deco(m, cylinderGeo(0.018, 0.44, 5), x, y + i * 0.30, z, Math.PI / 2, ry + Math.PI / 2, 0);
+    }
+  }
+
+  /** Ground stain — a flat disc that catches the light differently. */
+  addStain(x, z, r, mat) {
+    M4.compose(_xf, x, 0.014, z, 0, rnd(0, 6.28), 0, 1, 1, 1);
+    this.batches.get(mat.key, mat).add(planeGeo(r * 2, r * 2, 1, 1), _xf, 1, [rnd(0, 40), rnd(0, 40)]);
   }
 
   /* -------------------------------------------------------------- layout */
@@ -489,6 +545,51 @@ export class World {
       const s = rnd(0.10, 0.36);
       this.deco(pick([M.concreteDark, M.brick, M.steelDark]), boxGeo(s, s * rnd(0.3, 0.8), s * rnd(0.6, 1.4)),
         x, s * 0.16, z, rnd(0, 3.1), rnd(0, 6.28), rnd(0, 3.1));
+    }
+
+    /* ---- detail pass: pipework, cabling, stains, ladders */
+    // Power lines strung between the yard lamps and the tower.
+    this.addCable(-13.5, 5.9, -13.5, 13.5, 5.9, -13.5, 1.1, 12);
+    this.addCable(13.5, 5.9, -13.5, 13.5, 5.9, 13.5, 1.1, 12);
+    this.addCable(-13.5, 5.9, 13.5, -13.5, 5.9, -13.5, 1.1, 12);
+    this.addCable(-13.5, 5.9, -13.5, -2.4, deckY + 1.9, -2.4, 0.8, 10);
+    this.addCable(13.5, 5.9, 13.5, 27.0, 5.9, 7.0, 0.9, 10);
+    this.addCable(-27.0, 5.9, 7.0, -13.5, 5.9, 13.5, 0.9, 10);
+
+    // Pipework on the warehouse and the perimeter.
+    this.addPipeRun(innerX - 0.42, 3.9, wz - 4.0, 0, 14.0, 0.10);
+    this.addPipeRun(innerX - 0.42, 1.5, wz + 7.0, 0, 8.0, 0.07);
+    this.addPipeRun(-(ARENA + 1.2), 3.2, -8.0, Math.PI / 2, 16.0, 0.09);
+    this.addPipeRun(0, 3.4, ARENA + 1.2, 0, 18.0, 0.08);
+
+    this.addLadder(wx + 7.2, 0, wz - 11.6, 0, 5.1);
+    this.addLadder(-25.2, 0, -23.9, Math.PI / 2, 2.5);
+
+    // Oil stains and tyre-scrubbed patches on the pad.
+    for (let i = 0; i < 16; i++) {
+      this.addStain(rnd(-16, 16), rnd(-20, 20), rnd(0.8, 2.6), M.stain);
+    }
+    for (let i = 0; i < 10; i++) {
+      this.addStain(rnd(-26, 26), rnd(-28, 28), rnd(1.2, 3.4), M.sandPatch);
+    }
+
+    // Loose scrap: rebar bundles, sheet offcuts, cable spools.
+    for (let i = 0; i < 22; i++) {
+      const x = rnd(-28, 28), z = rnd(-30, 30);
+      const k = R();
+      if (k < 0.4) {
+        const ry = rnd(0, 3.14);
+        for (let j = 0; j < 5; j++) {
+          this.deco(M.steelDark, cylinderGeo(0.022, rnd(1.4, 2.6), 5),
+            x + rnd(-0.09, 0.09), 0.03 + j * 0.045, z + rnd(-0.09, 0.09), Math.PI / 2, ry + rnd(-0.06, 0.06), 0);
+        }
+      } else if (k < 0.72) {
+        this.deco(M.steel, boxGeo(rnd(0.7, 1.6), 0.03, rnd(0.5, 1.2)),
+          x, 0.02, z, rnd(-0.05, 0.05), rnd(0, 3.14), rnd(-0.05, 0.05));
+      } else {
+        this.deco(M.wood, cylinderGeo(rnd(0.35, 0.55), 0.42, 12),
+          x, 0.21, z, Math.PI / 2, rnd(0, 3.14), 0);
+      }
     }
 
     /* ---- lighting props */
