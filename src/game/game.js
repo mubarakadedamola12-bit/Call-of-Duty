@@ -996,6 +996,7 @@ export class Game {
 
   shoot() {
     const w = this.weapon, id = this.weaponId;
+    if (this.ammo[id] <= 0) return;   // never fire the magazine into the negative
     this.ammo[id]--;
     this.fireTimer = 60 / w.rpm;
     if (w.boltTime) this.boltTimer = w.boltTime;

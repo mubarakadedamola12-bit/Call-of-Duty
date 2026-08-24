@@ -173,6 +173,7 @@ function resize() {
   hud.resize(w, h, dpr, safe);
   if (touch) touch.layout(w, h, safe);
   checkOrientation();
+  needsRedraw = true;
 }
 addEventListener('resize', () => { if (renderer) resize(); });
 // iOS hands back stale viewport dimensions for a beat after a rotation, so
@@ -368,6 +369,7 @@ function commit(it) {
   if (it.apply) it.apply(settings[it.k]);
   refreshRow(it);
   saveSettings();
+  needsRedraw = true;   // the menus render on an idle clock
 }
 
 function refreshRow(it) {
@@ -553,6 +555,29 @@ let last = performance.now();
 let fpsAcc = 0, fpsN = 0, fpsShown = 0;
 let nextFrame = 0;
 let menuAcc = 0;
+// Redraw rate when nobody is actually playing. Rendering a full deferred frame
+// 60 times a second while the player reads the briefing — or has walked away
+// from a paused game — is pure heat for no benefit.
+export const IDLE_FPS = { menu: 20, paused: 6, blurred: 3 };
+
+/**
+ * Redraw rate for a given state. Pure so it can be reasoned about and tested
+ * without a browser: 0 means "every frame".
+ */
+export function idleTargetFps({ active, started, focused }) {
+  if (active) return 0;
+  if (!focused) return IDLE_FPS.blurred;
+  return started ? IDLE_FPS.paused : IDLE_FPS.menu;
+}
+
+let idleAcc = 0;
+let needsRedraw = true;
+let windowFocused = true;
+addEventListener('blur', () => { windowFocused = false; });
+addEventListener('focus', () => { windowFocused = true; needsRedraw = true; });
+
+/** Force one immediate redraw — used when a setting changes while idle. */
+export function invalidate() { needsRedraw = true; }
 
 function loop(now) {
   requestAnimationFrame(loop);
@@ -582,6 +607,21 @@ function loop(now) {
   if (touch) touch.enabled = started && !paused;
   if (active && touch) touch.update(dt);
   else if (touch && !active) { input.axis.x = 0; input.axis.y = 0; }
+
+  // Idle throttling: while not playing, redraw only often enough to keep the
+  // backdrop alive. Input still runs every frame so the UI stays responsive.
+  let drawFrame = true;
+  const target = idleTargetFps({ active, started, focused: windowFocused });
+  if (target > 0) {
+    idleAcc += dt;
+    if (needsRedraw || idleAcc >= 1 / target) { idleAcc = 0; drawFrame = true; }
+    else drawFrame = false;
+  } else {
+    idleAcc = 0;
+  }
+  needsRedraw = false;
+  if (!drawFrame) { input.endFrame(); return; }
+
   renderer.beginFrame(dt);
 
   if (active) game.update(dt);

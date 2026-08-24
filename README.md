@@ -251,6 +251,35 @@ and fill rate. Three changes account for most of the fix:
 Plus a 60 FPS limiter (a 120 Hz panel was doing twice the work for nothing) and
 a quarter-rate simulation behind the briefing screen.
 
+**Idle throttling.** The loop used to render a full deferred frame 60 times a
+second whenever the page was open — including while you read the briefing, sat
+in the settings, or left a paused game and walked away. Redraw rate is now tied
+to what you are actually doing:
+
+| state | redraw rate |
+|---|---|
+| playing | 60 (or your frame cap) |
+| briefing screen | 20 |
+| paused | 6 |
+| window not focused | 3 |
+
+Input still runs every frame, so the UI stays responsive.
+
+## Audio
+
+Every sound builds a small node graph — gain, panner, reverb send, filters.
+Those were never torn down, so each shot left roughly fifteen nodes permanently
+connected to the master bus and the audio thread walked a graph that only grew.
+Sustained fire could leave hundreds of live nodes, which is a good way to get
+crackle and a busy CPU.
+
+Voices are now reaped on a timer, budgeted (36 concurrent, hard ceiling 58),
+and dropped by distance when the budget is tight — your own weapon and anything
+within 14 m always plays, distant chatter is culled first. A limiter after the
+compressor stops overlapping gunfire clipping the output. The ambient wind bed
+was also cut roughly in half and rolled off higher, since a constant broadband
+hiss is fatiguing over a long session.
+
 Net: **7.3 ms → 3.7 ms** per frame on desktop, **0.7 ms** on the mobile tier.
 Render resolution and the frame cap are the first two knobs in the settings if
 you need more.

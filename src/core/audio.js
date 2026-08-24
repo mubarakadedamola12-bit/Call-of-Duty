@@ -24,8 +24,25 @@ export class Audio {
     this.comp.attack.value = 0.002;
     this.comp.release.value = 0.22;
 
+    // Hard ceiling after the compressor. Overlapping gunfire could otherwise
+    // push the sum past 0 dBFS, and clipped output is exactly the harsh
+    // crackle people describe as "noise".
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -1.5;
+    this.limiter.knee.value = 0;
+    this.limiter.ratio.value = 20;
+    this.limiter.attack.value = 0.001;
+    this.limiter.release.value = 0.10;
+
     this.master.connect(this.comp);
-    this.comp.connect(ctx.destination);
+    this.comp.connect(this.limiter);
+    this.limiter.connect(ctx.destination);
+
+    // Live voice bookkeeping. Every sound builds a small node graph; without
+    // tearing them down they stay connected to the master bus forever and the
+    // audio thread walks a graph that only ever grows.
+    this.voices = 0;
+    this.maxVoices = 36;
 
     // Reverb: synthesised impulse (open desert / metal yard slap).
     this.verb = ctx.createConvolver();
@@ -88,12 +105,20 @@ export class Audio {
     return s;
   }
 
-  /** Build a 3D-ish output chain: distance gain + stereo pan + reverb send. */
+  /**
+   * Build a 3D-ish output chain: distance gain + stereo pan + reverb send.
+   * The chain is torn down `life` seconds later — see `voices` above.
+   * Returns null when the voice budget is spent, and callers bail out.
+   */
   _out(opts = {}) {
+    if (this.voices >= this.maxVoices && !opts.important) return null;
+    if (this.voices >= this.maxVoices * 1.6) return null;   // ceiling, no exceptions
     const ctx = this.ctx;
+    const nodes = [];
     const g = ctx.createGain();
     const pan = ctx.createStereoPanner();
     pan.pan.value = opts.pan || 0;
+    nodes.push(g, pan);
     g.connect(pan);
     pan.connect(this.master);
     if (opts.verb !== 0) {
@@ -101,6 +126,7 @@ export class Audio {
       send.gain.value = opts.verb === undefined ? 0.30 : opts.verb;
       pan.connect(send);
       send.connect(this.verb);
+      nodes.push(send);
     }
     if (opts.distance !== undefined && opts.distance > 0) {
       // Air absorption: distant shots lose their top end.
@@ -110,7 +136,14 @@ export class Audio {
       g.disconnect();
       g.connect(lp);
       lp.connect(pan);
+      nodes.push(lp);
     }
+    this.voices++;
+    const life = (opts.life || 1.0) * 1000 + 250;
+    setTimeout(() => {
+      this.voices--;
+      for (const n of nodes) { try { n.disconnect(); } catch { /* already gone */ } }
+    }, life);
     return g;
   }
 
@@ -124,7 +157,11 @@ export class Audio {
     } = profile;
     const dist = spatial.distance || 0;
     const distGain = 1 / (1 + dist * 0.085);
-    const out = this._out({ pan: spatial.pan || 0, distance: dist, verb: 0.24 + Math.min(dist, 30) * 0.010 });
+    // Your own weapon and anything close always plays; distant chatter is the
+    // first thing dropped when the voice budget is tight.
+    const out = this._out({ pan: spatial.pan || 0, distance: dist,
+      verb: 0.24 + Math.min(dist, 30) * 0.010, life: dur + 0.7, important: dist < 14 });
+    if (!out) return;
     out.gain.value = (spatial.gain === undefined ? 1 : spatial.gain) * distGain;
     out.connect(this.master);
 
@@ -183,7 +220,8 @@ export class Audio {
   whiz(pan = 0, close = 1) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ pan, verb: 0.08 });
+    const out = this._out({ pan, verb: 0.08, life: 0.25 });
+    if (!out) return;
     out.gain.value = 0.42 * close;
     const n = this._src(this.noise, 1.4);
     const bp = ctx.createBiquadFilter();
@@ -202,7 +240,8 @@ export class Audio {
   impact(kind = 'hard', pan = 0, distance = 0) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ pan, distance, verb: 0.18 });
+    const out = this._out({ pan, distance, verb: 0.18, life: 0.45 });
+    if (!out) return;
     out.gain.value = 0.55 / (1 + distance * 0.12);
     const n = this._src(this.noise, kind === 'metal' ? 1.5 : 1.0);
     const f = ctx.createBiquadFilter();
@@ -231,7 +270,8 @@ export class Audio {
   explosion(distance = 0, pan = 0) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ pan, distance, verb: 0.55 });
+    const out = this._out({ pan, distance, verb: 0.55, life: 1.6, important: distance < 40 });
+    if (!out) return;
     out.gain.value = 1.5 / (1 + distance * 0.05);
     const n = this._src(this.pinkish, 0.55);
     const lp = ctx.createBiquadFilter();
@@ -259,7 +299,8 @@ export class Audio {
   click(freq = 2000, gain = 0.30, dur = 0.045, type = 'square') {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ verb: 0.10 });
+    const out = this._out({ verb: 0.10, life: dur + 0.15 });
+    if (!out) return;
     out.gain.value = gain;
     const o = ctx.createOscillator();
     o.type = type;
@@ -291,7 +332,8 @@ export class Audio {
   footstep(speed = 1, pan = 0) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ pan, verb: 0.16 });
+    const out = this._out({ pan, verb: 0.16, life: 0.25 });
+    if (!out) return;
     out.gain.value = 0.16 * speed;
     const n = this._src(this.noise, 0.6 + Math.random() * 0.4);
     const bp = ctx.createBiquadFilter();
@@ -308,7 +350,8 @@ export class Audio {
   shell(pan = 0) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime + 0.28 + Math.random() * 0.12;
-    const out = this._out({ pan, verb: 0.20 });
+    const out = this._out({ pan, verb: 0.20, life: 0.6 });
+    if (!out) return;
     out.gain.value = 0.10;
     for (let i = 0; i < 2; i++) {
       const o = ctx.createOscillator();
@@ -329,7 +372,8 @@ export class Audio {
   hitmarker(head = false) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
-    const out = this._out({ verb: 0 });
+    const out = this._out({ verb: 0, life: 0.2, important: true });
+    if (!out) return;
     out.gain.value = head ? 0.30 : 0.20;
     const o = ctx.createOscillator();
     o.type = 'square';
@@ -346,7 +390,8 @@ export class Audio {
     const ctx = this.ctx;
     freqs.forEach((f, i) => {
       const t = ctx.currentTime + i * dur * 0.7;
-      const out = this._out({ verb: 0.12 });
+      const out = this._out({ verb: 0.12, life: dur + 0.3, important: true });
+      if (!out) return;
       out.gain.value = gain;
       const o = ctx.createOscillator();
       o.type = type;
@@ -371,11 +416,11 @@ export class Audio {
     const n = this._src(this.pinkish, 0.30);
     n.loop = true;
     const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 520;
+    lp.type = 'lowpass'; lp.frequency.value = 340;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass'; bp.frequency.value = 380; bp.Q.value = 0.4;
     const g = ctx.createGain();
-    g.gain.value = 0.055;
+    g.gain.value = 0.030;
     n.connect(lp); lp.connect(bp); bp.connect(g); g.connect(this.master);
     n.start(t);
     this.windGain = g;
@@ -384,7 +429,7 @@ export class Audio {
     // Slow LFO on the wind so it breathes.
     const lfo = ctx.createOscillator();
     lfo.type = 'sine'; lfo.frequency.value = 0.062;
-    const lg = ctx.createGain(); lg.gain.value = 0.028;
+    const lg = ctx.createGain(); lg.gain.value = 0.014;
     lfo.connect(lg); lg.connect(g.gain);
     lfo.start(t);
   }
