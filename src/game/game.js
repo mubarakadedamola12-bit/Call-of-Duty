@@ -70,14 +70,14 @@ export const STREAKS = [
 ];
 
 export class Game {
-  constructor(gl, renderer, audio, input, hud, difficulty = 'regular', mapId = 'scrapyard') {
+  constructor(gl, renderer, audio, input, hud, difficulty = 'regular', mapId = 'scrapyard', humans = null) {
     this.diff = { ...(DIFFICULTY[difficulty] || DIFFICULTY.regular) };
     this.difficultyKey = DIFFICULTY[difficulty] ? difficulty : 'regular';
     this.mapId = MAPS[mapId] ? mapId : 'scrapyard';
     this.gl = gl; this.renderer = renderer; this.audio = audio;
     this.input = input; this.hud = hud;
 
-    this.world = new World(this.mapId);
+    this.world = new World(this.mapId, { humans });
     // The map owns its own light and colour; adopt it before anything renders.
     renderer.applyAtmosphere(this.world.atmosphere);
     this.worldMeshes = this.world.upload(gl);

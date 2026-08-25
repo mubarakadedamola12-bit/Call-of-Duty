@@ -8,6 +8,7 @@ import { Audio } from './core/audio.js';
 import { HUD } from './game/hud.js';
 import { Game, DIFFICULTY } from './game/game.js';
 import { MAPS } from './game/world.js';
+import { HumanLibrary } from './game/humans.js';
 import { WEAPONS } from './game/weapons.js';
 import { clamp } from './core/math.js';
 
@@ -61,6 +62,7 @@ try { Object.assign(settings, JSON.parse(localStorage.getItem('ob_settings') || 
 const saveSettings = () => { try { localStorage.setItem('ob_settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let gl, renderer, input, audio, hud, game, touch;
+let humans = null;
 let running = false, paused = false, started = false;
 const safe = { l: 0, r: 0, t: 0, b: 0 };
 
@@ -132,11 +134,17 @@ async function boot() {
   setProgress(0.10, 'BAKING MATERIALS…');
   await renderer.loadMaterials((p) => setProgress(0.10 + p * 0.62, 'BAKING MATERIALS… ' + (p * 100 | 0) + '%'));
 
-  setProgress(0.76, 'BUILDING SCRAPYARD…');
+  setProgress(0.74, 'LOADING CIVILIANS…');
+  humans = new HumanLibrary();
+  // Scenery, not gameplay: if the pack is missing the game still runs.
+  await humans.load((p) => setProgress(0.74 + p * 0.12, `LOADING CIVILIANS… ${(p * 100) | 0}%`))
+    .catch((e) => { console.warn('[humans] pack unavailable:', e.message); });
+
+  setProgress(0.87, 'BUILDING BATTLEGROUND…');
   await frame();
   resize();
 
-  game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map);
+  game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map, humans);
   game.touch = touch;
   setProgress(0.94, 'DEPLOYING SQUADS…');
   await frame();
@@ -446,7 +454,7 @@ function initUI() {
     $('menu').classList.remove('hidden');
   });
   $('restart').addEventListener('click', () => {
-    game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map);
+    game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map, humans);
     game.touch = touch;
     hud.buildMinimap(game.world);
     game.loadout[0] = settings.primary;

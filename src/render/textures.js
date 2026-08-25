@@ -102,9 +102,9 @@ const TILE = 8; // noise period — must divide evenly for seamlessness
 export const MAT = {
   SAND: 0, CONCRETE: 1, CONTAINER: 2, CORRUGATED: 3, WOOD: 4, GUNMETAL: 5,
   POLYMER: 6, SANDBAG: 7, RUSTBARREL: 8, ASPHALT: 9, FATIGUES: 10, BRICK: 11,
-  TARP: 12, GLASSDIRT: 13,
+  TARP: 12, GLASSDIRT: 13, PLAIN: 14,
 };
-export const MAT_COUNT = 14;
+export const MAT_COUNT = 15;
 
 const gens = new Array(MAT_COUNT);
 
@@ -322,6 +322,28 @@ gens[MAT.GLASSDIRT] = (o, u, v) => {
   o[6] = 1;
 };
 
+/**
+ * Near-white surface with fine cloth-ish grain. Imported glTF models carry
+ * their colour as a flat baseColorFactor; this gives them micro-detail and a
+ * normal map to catch the light, while the per-vertex tint supplies the hue.
+ * Its mean albedo is PLAIN_ALBEDO, which callers divide by so the tint lands
+ * on the authored colour rather than being darkened by the texture.
+ */
+export const PLAIN_ALBEDO = 0.72;
+
+gens[MAT.PLAIN] = (o, u, v) => {
+  const weave = (Math.sin(u * Math.PI * 2 * 30) * 0.5 + 0.5) * 0.5
+              + (Math.sin(v * Math.PI * 2 * 30) * 0.5 + 0.5) * 0.5;
+  const grain = fbm(u * 14, v * 14, TILE * 14, 3);
+  const macro = fbm(u * 3, v * 3, TILE * 3, 3);
+  const l = PLAIN_ALBEDO * mix(0.93, 1.05, weave) * mix(0.95, 1.05, sat(grain + 0.5));
+  o[0] = l; o[1] = l; o[2] = l;
+  o[3] = mix(0.62, 0.86, weave) * mix(0.96, 1.04, sat(macro + 0.5));
+  o[4] = 0;
+  o[5] = weave * 0.35 + grain * 0.30;
+  o[6] = mix(0.88, 1, weave);
+};
+
 /* --------------------------------------------------------------- baking */
 
 const SIZE = 512;
@@ -382,8 +404,8 @@ function bakeLayer(gen, albedo, surf, layer, normalStrength) {
 // Sobel gain per material. Kept modest: an over-strong normal map turns into
 // specular sparkle once the surface is in motion.
 export const NORMAL_STRENGTH = [
-  //sand con  cont corr wood gun  poly bag  barr asph fat  brick tarp glass
-  2.20, 1.90, 1.60, 1.70, 1.80, 0.90, 1.40, 2.60, 2.00, 1.80, 1.10, 2.30, 1.60, 0.60,
+  //sand con  cont corr wood gun  poly bag  barr asph fat  brick tarp glass plain
+  2.20, 1.90, 1.60, 1.70, 1.80, 0.90, 1.40, 2.60, 2.00, 1.80, 1.10, 2.30, 1.60, 0.60, 0.85,
 ];
 
 /**

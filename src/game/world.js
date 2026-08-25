@@ -6,6 +6,7 @@
 import { Builder, boxGeo, cylinderGeo, sphereGeo, planeGeo } from '../render/geometry.js';
 import { MAT } from '../render/textures.js';
 import { defaultMaterial } from '../render/renderer.js';
+import { humanMaterial, tintFor } from './humans.js';
 import { M4, m4, mulberry32, clamp } from '../core/math.js';
 
 const R = mulberry32(20260823);
@@ -114,7 +115,8 @@ class Batches {
 const _xf = m4();
 
 export class World {
-  constructor(mapId = 'scrapyard') {
+  constructor(mapId = 'scrapyard', opts = {}) {
+    this.humans = opts.humans || null;   // HumanLibrary, optional
     this.batches = new Batches();
     this.colliders = [];
     this.lights = [];          // static emissive point lights
@@ -358,7 +360,7 @@ export class World {
    * Hollow building shell: four walls with a doorway on one side and an open
    * top, so it reads as a ruin you can fight through rather than a solid block.
    */
-  addRuin(x, z, w, d, h, ry, mat, doorSide = 0) {
+  addRuin(x, z, w, d, h, ry, mat, doorSide = 0, roof = false) {
     const m = mat || World.M.brick;
     const c = Math.cos(ry), s = Math.sin(ry);
     const put = (lx, lz, lw, ld) => {
@@ -390,6 +392,21 @@ export class World {
         put(sd[0], sd[1], sd[2], sd[3]);
       }
     });
+    // Flat roof, where the shell is still intact. Adobe roofs are flat, and it
+    // gives the rooftop figures something to actually stand on.
+    if (roof) {
+      this.box(mat === World.M.brick ? World.M.concreteDark : m, w - 0.2, 0.35, d - 0.2,
+        x, h - 0.175, z, ry, 1);
+      // Low parapet around the edge.
+      for (const [ox, oz, pw, pd] of [
+        [0, -d / 2 + 0.3, w, 0.3], [0, d / 2 - 0.3, w, 0.3],
+        [-w / 2 + 0.3, 0, 0.3, d], [w / 2 - 0.3, 0, 0.3, d],
+      ]) {
+        this.deco(m, boxGeo(pw, 0.5, pd),
+          x + c * ox - s * oz, h + 0.25, z + s * ox + c * oz, 0, ry, 0, 1, 1, 1, 1.2);
+      }
+    }
+
     // Broken parapet.
     for (let i = 0; i < 10; i++) {
       const a = rnd(0, 6.28), rr = Math.max(w, d) * 0.5;
@@ -425,6 +442,36 @@ export class World {
         boxGeo(0.72, 0.40, 0.06), x + sgn * 0.55, h - 0.24, z - 0.17, 0, 0, sgn * 0.22);
       this.lights.push({ x: x + sgn * 0.8, y: h - 0.6, z: z - 0.5, r: 30, col, i: 620 });
     }
+  }
+
+  /**
+   * Bakes an imported civilian into the static batch. Deliberately collision-
+   * free and placed clear of the fight: a human-shaped object you can shoot
+   * through reads as a bug, so these live beyond the wire as scenery.
+   */
+  addHuman(name, x, z, ry = 0, y = 0, scaleMul = 1) {
+    if (!this.humans || !this.humans.has(name)) return false;
+    const model = this.humans.get(name);
+    const sc = model.scale * scaleMul;
+    const b = this.batches.get('humans', humanMaterial());
+    M4.compose(_xf, x, y, z, 0, ry, 0, sc, sc, sc);
+    for (const prim of model.prims) {
+      b.add(
+        { pos: prim.pos, nrm: prim.nrm, uv: prim.uv, idx: prim.idx },
+        _xf, 1, [0, 0],
+        { layer: MAT.PLAIN, tint: tintFor(prim.tint) },
+      );
+    }
+    return true;
+  }
+
+  /** Scatters onlookers around a ring outside the arena. */
+  addCrowdRing(entries) {
+    let placed = 0;
+    for (const [name, x, z, ry, scaleMul] of entries) {
+      if (this.addHuman(name, x, z, ry, 0, scaleMul === undefined ? 1 : scaleMul)) placed++;
+    }
+    return placed;
   }
 
   /** Sagging cable between two points — catenary, in segments. */
@@ -737,6 +784,21 @@ export class World {
       }
     }
 
+    /* ---- yard crew, up on the stacks and the warehouse roof: visible from
+       anywhere on the pad, and well out of the fight */
+    for (const [name, hx, hz, hh, ry] of [
+      ['male_standing_hips', -25.2, -14.2, 5.21, 1.6],
+      ['male_lookingup', -25.2, -7.9, 5.21, 1.9],
+      ['male_standing_coveringeyes', -25.2, 0.6, 5.21, 1.4],
+      ['female_standing', -16.8, -17.5, 2.59, 1.7],
+      ['male_pickingup', -16.8, 10.1, 2.59, 2.1],
+      ['male_standing', wx - 3.0, wz - 9.0, 5.68, -1.5],
+      ['female_standing_hips', wx + 2.0, wz - 3.0, 5.68, -1.8],
+      ['male_walking', wx + 4.5, wz + 6.0, 5.68, -1.2],
+      ['woman_standing_waving', 5.5, -23.5, 2.61, 0.1],
+      ['male_sitting', -4.5, 23.5, 2.61, 3.2],
+    ]) this.addHuman(name, hx, hz, ry, hh + 0.02);
+
     /* ---- lighting props */
     this.addLamp(-13.5, -13.5); this.addLamp(13.5, 13.5);
     this.addLamp(-13.5, 13.5); this.addLamp(13.5, -13.5);
@@ -852,6 +914,13 @@ export class World {
     this.addFireBarrel(-13, 20);
     this.addFireBarrel(13, -20);
 
+    // Techs up on the tank decks — enough to imply the site is manned, and the
+    // only human silhouettes against a floodlit sky.
+    for (const [name, hx, hz, hh, ry] of [
+      ['male_standing', -15, -15, 11.5, 2.2], ['male_lookingup', 15, 15, 11.5, -0.9],
+      ['male_standing_hips', -16, 14, 9.0, 1.4], ['male_walking', 16, -14, 9.0, -1.7],
+    ]) this.addHuman(name, hx, hz, ry, hh + 0.02);
+
     const grid = [[-1.8, -1.8], [0, -2.2], [1.8, -1.8], [-2.2, 0], [2.2, 0], [-1.8, 1.8], [1.8, 1.8], [0, 2.2]];
     for (const [ox, oz] of grid) {
       this.spawns[0].push({ x: -27 + ox, z: 27 + oz, yaw: Math.PI * 0.75 });
@@ -893,8 +962,11 @@ export class World {
       [9, 14, 9, 8, 4.8, -0.04, 3], [21, 15, 8, 8, 3.6, 0.08, 2],
       [-3, 25, 8, 7, 3.8, 0, 0], [4, -27, 8, 7, 3.6, 0, 1],
     ];
+    // Buildings that carry a rooftop figure keep their roof; the rest are
+    // bombed open, which also varies the skyline.
+    const roofed = new Set(['-19,-18', '20,-17', '-19,13', '21,15', '-3,25', '4,-27', '-21,-3', '21,-2']);
     for (const [x, z, w, d, h, ry, door] of houses) {
-      this.addRuin(x, z, w, d, h, ry, M.brick, door);
+      this.addRuin(x, z, w, d, h, ry, M.brick, door, roofed.has(`${x},${z}`));
     }
 
     // Central plaza: a well, stalls and sandbag positions.
@@ -930,6 +1002,25 @@ export class World {
       else this.addTireStack(x, z, 2 + ((R() * 3) | 0));
     }
     for (let i = 0; i < 12; i++) this.addStain(rnd(-26, 26), rnd(-26, 26), rnd(1, 3), M.sandPatch);
+
+    // Villagers watching from the rooftops. Placed up there deliberately:
+    // visible from anywhere in the map, unreachable (the shells are 3.5 m+ and
+    // there is nothing to mantle from), and so never mistaken for a target.
+    for (const [name, hx, hz, hh, ry] of [
+      ['female_sitting', -19, -18, 4.2, 1.9], ['male_sitting', -17, -16.5, 4.2, 2.2],
+      ['female_standing_coveringeyes', 20, -17, 3.8, -1.6], ['male_lookingup', 21.5, -15, 3.8, -1.9],
+      ['woman_standing_waving', -19, 13, 4.0, 1.5], ['male_standing_hips', -17.5, 15, 4.0, 1.2],
+      ['female_standing', 21, 15, 3.6, -1.4], ['male_standing', 22.5, 13.5, 3.6, -1.8],
+      ['female_sitting_cheering', -3, 25, 3.8, 3.1], ['male_standing_waving', -1, 23.5, 3.8, 3.4],
+      ['male_pickingup', 4, -27, 3.6, 0.2], ['female_lookingup', -21, -3, 4.6, 1.7],
+      ['male_standing_coveringeyes', 21, -2, 3.6, -1.5],
+    ]) this.addHuman(name, hx, hz, ry, hh + 0.02);
+
+    // A few at ground level, framed by the gaps in the perimeter wall.
+    this.addCrowdRing([
+      ['female_walking', -37, 0, 1.55], ['male_walking', 37, 0, -1.55],
+      ['female_pickingup', -38.5, 3.5, 1.7], ['male_running', 38, -3.5, -1.4],
+    ]);
 
     // Palms-as-poles with cabling between them, for vertical interest.
     for (const [x, z] of [[-14, 6], [14, -6], [-14, -10], [14, 10]]) this.addLamp(x, z, 5.6);

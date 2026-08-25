@@ -57,7 +57,18 @@ Skinning also cut the cost: one draw call per soldier instead of 28.
 
 **Ceiling worth stating plainly:** this is a stylised human, not a photoreal
 one. Photoreal characters need scanned geometry and authored albedo/normal/
-roughness maps — assets, not code. Everything here is generated at runtime.
+roughness maps — assets, not code.
+
+### Imported models
+
+There is a glTF 2.0 / GLB reader (`src/render/gltf.js`) and the game ships with
+Quaternius' CC0 *Background Posed Humans* pack as scenery — civilians on
+rooftops and beyond the wire. See `assets/models/humans/CREDITS.md` for what
+the loader supports and how to add your own.
+
+Those figures are **static and unrigged**, so they are set dressing only; the
+soldiers you fight use the skinned rig above. Each map's crowd is baked into
+the static batches, so the whole lot costs one draw call.
 
 ## What the research fed into
 
