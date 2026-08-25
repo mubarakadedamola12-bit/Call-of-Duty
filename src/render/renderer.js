@@ -66,6 +66,10 @@ export class Renderer {
     this.cloudScale = 0.0045;
     this.cloudSpeed = 0.0055;
     this.fogColor = v3(0.32, 0.29, 0.31);
+    this.skyZenith = v3(0.080, 0.170, 0.350);
+    this.skyMid = v3(0.265, 0.345, 0.490);
+    this.skyHaze = v3(0.640, 0.520, 0.395);
+    this.groundBounce = v3(0.205, 0.160, 0.110);
     this.fogDensity = 0.0026;
     this.fogHeight = 40;
 
@@ -88,6 +92,8 @@ export class Renderer {
     // ---- per-frame lists
     this.draws = [];
     this.drawPool = [];
+    this.skinDraws = [];
+    this.skinPool = [];
     this.lightPosR = new Float32Array(S.MAX_LIGHTS * 4);
     this.lightCol = new Float32Array(S.MAX_LIGHTS * 4);
     this.lightCount = 0;
@@ -135,7 +141,9 @@ export class Renderer {
     const P = (vs, fs, n) => new Program(gl, vs, fs, n);
     this.pg = {
       gbuffer: P(S.gbufferVS, S.gbufferFS, 'gbuffer'),
+      gbufferSkin: P(S.skinnedGbufferVS, S.gbufferFS, 'gbufferSkin'),
       shadow: P(S.shadowVS, S.shadowFS, 'shadow'),
+      shadowSkin: P(S.skinnedShadowVS, S.shadowFS, 'shadowSkin'),
       ssao: P(S.fsTriVS, S.ssaoFS, 'ssao'),
       blur: P(S.fsTriVS, S.blurFS, 'blur'),
       lighting: P(S.fsTriVS, S.lightingFS, 'lighting'),
@@ -199,6 +207,35 @@ export class Renderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+  }
+
+  /** Applies a map's atmosphere preset wholesale. */
+  applyAtmosphere(a) {
+    if (!a) return;
+    const setV = (dst, src) => { if (src) { dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; } };
+    if (a.sunDir) V3.norm(this.sunDir, v3(a.sunDir[0], a.sunDir[1], a.sunDir[2]));
+    setV(this.sunColor, a.sunColor);
+    setV(this.ambientTint, a.ambientTint);
+    setV(this.fogColor, a.fogColor);
+    setV(this.skyZenith, a.skyZenith);
+    setV(this.skyMid, a.skyMid);
+    setV(this.skyHaze, a.skyHaze);
+    setV(this.groundBounce, a.groundBounce);
+    setV(this.lift, a.lift);
+    if (a.sunIntensity !== undefined) this.sunIntensity = a.sunIntensity;
+    if (a.ambientMul !== undefined) this.ambientMul = a.ambientMul;
+    if (a.fogDensity !== undefined) this.fogDensity = a.fogDensity;
+    if (a.fogHeight !== undefined) this.fogHeight = a.fogHeight;
+    if (a.cloudAmount !== undefined) this.cloudAmount = a.cloudAmount;
+    if (a.exposure !== undefined) this.exposure = a.exposure;
+    if (a.saturation !== undefined) this.saturation = a.saturation;
+    if (a.contrast !== undefined) this.contrast = a.contrast;
+    // Ground bounce defaults to a darkened haze if the map does not name one.
+    if (!a.groundBounce && a.skyHaze) {
+      this.groundBounce[0] = a.skyHaze[0] * 0.32;
+      this.groundBounce[1] = a.skyHaze[1] * 0.30;
+      this.groundBounce[2] = a.skyHaze[2] * 0.28;
     }
   }
 
@@ -306,6 +343,7 @@ export class Renderer {
 
   beginFrame(dt) {
     this.draws.length = 0;
+    this.skinDraws.length = 0;
     this.lightCount = 0;
     this.pCount = 0;
     this.bCount = 0;
@@ -341,6 +379,38 @@ export class Renderer {
     if (id === undefined) { id = this._nextMatId++; this._matId.set(mat, id); }
     it.key = id;
     this.draws.push(it);
+  }
+
+  /**
+   * Submit a skinned mesh. `palette` is a Float32Array of MAX_BONES mat4s; it
+   * is copied because the caller reuses one buffer for every actor.
+   */
+  drawSkinned(mesh, model, palette, mat, castShadow = true) {
+    let it = this.skinPool[this.skinDraws.length];
+    if (!it) {
+      it = { mesh: null, model: m4(), palette: new Float32Array(S.MAX_BONES * 16),
+             mat: null, castShadow: true, x: 0, y: 0, z: 0, r: 0 };
+      this.skinPool.push(it);
+    }
+    it.mesh = mesh;
+    it.model.set(model);
+    it.palette.set(palette);
+    it.mat = mat;
+    it.castShadow = castShadow;
+    // Bounds must follow the actor, not sit at the bind pose. Bone 0's palette
+    // matrix is the root transform (world * inverse-bind collapses to it), so
+    // it doubles as the model matrix for culling purposes.
+    const bx = mesh.bx, by = mesh.by, bz = mesh.bz;
+    const r0 = palette;
+    const wx = r0[0] * bx + r0[4] * by + r0[8] * bz + r0[12];
+    const wy = r0[1] * bx + r0[5] * by + r0[9] * bz + r0[13];
+    const wz = r0[2] * bx + r0[6] * by + r0[10] * bz + r0[14];
+    const m = model;
+    it.x = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
+    it.y = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
+    it.z = m[2] * wx + m[6] * wy + m[10] * wz + m[14];
+    it.r = mesh.br;
+    this.skinDraws.push(it);
   }
 
   addLight(x, y, z, radius, r, g, b, intensity) {
@@ -444,6 +514,26 @@ export class Renderer {
         it.mesh.draw();
         shadowDrawn++;
       }
+
+      if (this.skinDraws.length) {
+        const sp = this.pg.shadowSkin.use();
+        sp.m4('uLightVP', lvp);
+        for (const it of this.skinDraws) {
+          if (!it.castShadow) continue;
+          if (this.cull) {
+            const x = lvp[0] * it.x + lvp[4] * it.y + lvp[8] * it.z + lvp[12];
+            const y = lvp[1] * it.x + lvp[5] * it.y + lvp[9] * it.z + lvp[13];
+            const z = lvp[2] * it.x + lvp[6] * it.y + lvp[10] * it.z + lvp[14];
+            const rn = it.r * inv;
+            if (x < -1 - rn || x > 1 + rn || y < -1 - rn || y > 1 + rn || z > 1 + rn) continue;
+          }
+          gl.uniformMatrix4fv(sp.u.uBones, false, it.palette);
+          sp.m4('uModel', it.model);
+          it.mesh.draw();
+          shadowDrawn++;
+        }
+        pg.use();   // restore the static program for the next cascade
+      }
     }
     this.stats.shadowDrawn = shadowDrawn;
     gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -504,6 +594,37 @@ export class Renderer {
       it.mesh.draw();
     }
     gl.bindVertexArray(null);
+
+    // Skinned actors: same G-buffer, different vertex program.
+    if (this.skinDraws.length) {
+      const sp = this.pg.gbufferSkin.use();
+      sp.m4('uVP', this.vp);
+      sp.tex('uAlbedoArr', this.matAlbedo, gl.TEXTURE_2D_ARRAY, ARRAY_UNIT_ALBEDO);
+      sp.tex('uSurfArr', this.matSurf, gl.TEXTURE_2D_ARRAY, ARRAY_UNIT_SURF);
+      let skinMat = null, skinDrawn = 0;
+      for (const it of this.skinDraws) {
+        if (this.cull && !this._sphereInFrustum(it.x, it.y, it.z, it.r)) continue;
+        const m = it.mat;
+        if (m !== skinMat) {
+          sp.f('uLayer', m.layer);
+          sp.f2('uUVScale', m.uvScale[0], m.uvScale[1]);
+          sp.f3('uTint', m.tint[0], m.tint[1], m.tint[2]);
+          sp.f3('uEmissive', m.emissive[0], m.emissive[1], m.emissive[2]);
+          sp.f('uRoughMul', m.rough);
+          sp.f('uMetalMul', m.metal);
+          sp.f('uNormalScale', m.normalScale);
+          sp.f('uMacro', m.macro);
+          sp.f('uAOMul', m.ao);
+          skinMat = m;
+        }
+        gl.uniformMatrix4fv(sp.u.uBones, false, it.palette);
+        sp.m4('uModel', it.model);
+        it.mesh.draw();
+        skinDrawn++;
+      }
+      this.stats.drawn += skinDrawn;
+      this.pg.gbuffer.use();
+    }
 
     // Decals write into the G-buffer so they receive full lighting.
     if (this.dCount > 0) {
@@ -604,6 +725,10 @@ export class Renderer {
     pg.v3('uSunDir', this.sunDir);
     pg.f3('uSunColor', this.sunColor[0] * this.sunIntensity, this.sunColor[1] * this.sunIntensity, this.sunColor[2] * this.sunIntensity);
     pg.f('uTime', this.time);
+    pg.v3('uSkyZenith', this.skyZenith);
+    pg.v3('uSkyMid', this.skyMid);
+    pg.v3('uSkyHaze', this.skyHaze);
+    pg.v3('uGroundBounce', this.groundBounce);
     pg.v3('uAmbientTint', this.ambientTint);
     pg.f('uAmbientMul', this.ambientMul);
     pg.f('uFogDensity', this.fogDensity);

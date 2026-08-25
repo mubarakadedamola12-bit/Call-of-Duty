@@ -7,6 +7,7 @@ import { TouchControls } from './core/touch.js';
 import { Audio } from './core/audio.js';
 import { HUD } from './game/hud.js';
 import { Game, DIFFICULTY } from './game/game.js';
+import { MAPS } from './game/world.js';
 import { WEAPONS } from './game/weapons.js';
 import { clamp } from './core/math.js';
 
@@ -47,6 +48,7 @@ const settings = {
   invertY: false,
   aimAssist: IS_TOUCH ? 0.85 : 0,
   difficulty: 'regular',
+  map: 'scrapyard',
   bloom: 0.55,
   chroma: 0.13,
   vignette: 0.58,
@@ -134,7 +136,7 @@ async function boot() {
   await frame();
   resize();
 
-  game = new Game(gl, renderer, audio, input, hud, settings.difficulty);
+  game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map);
   game.touch = touch;
   setProgress(0.94, 'DEPLOYING SQUADS…');
   await frame();
@@ -264,6 +266,9 @@ function schema() {
     ]],
 
     ['GAMEPLAY', [
+      { k: 'map', label: 'Battleground', type: 'select',
+        options: Object.keys(MAPS).map((k) => [k, MAPS[k].name]),
+        hint: 'Takes effect on the next match — use Restart Match to deploy there now.' },
       { k: 'difficulty', label: 'Difficulty', type: 'select',
         options: Object.keys(DIFFICULTY).map((k) => [k, DIFFICULTY[k].name]),
         hint: 'Scales everyone\u2019s health (so firefights last longer), how much '
@@ -389,7 +394,9 @@ function refreshSettingsUI() {
   const el = $('matchsummary');
   if (el) {
     const d = DIFFICULTY[settings.difficulty] || DIFFICULTY.regular;
-    el.innerHTML = `Difficulty <b>${d.name}</b><br>`
+    const mp = MAPS[settings.map] || MAPS.scrapyard;
+    el.innerHTML = `<b>${mp.name}</b> — ${mp.blurb}<br>`
+      + `Difficulty <b>${d.name}</b><br>`
       + `Health <b>${Math.round(100 * d.healthScale)}</b> · `
       + `Damage taken <b>${Math.round(d.damageTaken * 100)}%</b><br>`
       + `Quality <b>${settings.quality.toUpperCase()}</b> · `
@@ -439,8 +446,9 @@ function initUI() {
     $('menu').classList.remove('hidden');
   });
   $('restart').addEventListener('click', () => {
-    game = new Game(gl, renderer, audio, input, hud, settings.difficulty);
+    game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map);
     game.touch = touch;
+    hud.buildMinimap(game.world);
     game.loadout[0] = settings.primary;
     hud.killfeed.length = 0;
     applySettings();

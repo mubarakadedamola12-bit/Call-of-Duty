@@ -14,6 +14,55 @@ const pick = (arr) => arr[(R() * arr.length) | 0];
 
 export const ARENA = 33;      // half-extent of the playable box
 
+/**
+ * Map registry. `atmosphere` is applied wholesale to the renderer, and is
+ * doing most of the work of making the three locations feel different — the
+ * same geometry under a different sky reads as a different place.
+ */
+export const MAPS = {
+  scrapyard: {
+    name: 'SCRAPYARD',
+    blurb: 'Desert container yard · golden hour',
+    build: (w) => w.buildScrapyard(),
+    atmosphere: {
+      sunDir: [0.40, 0.78, 0.62], sunColor: [1.0, 0.80, 0.58], sunIntensity: 4.4,
+      ambientTint: [0.66, 0.77, 1.0], ambientMul: 3.10,
+      fogColor: [0.32, 0.29, 0.31], fogDensity: 0.0026, fogHeight: 40,
+      cloudAmount: 0.55, exposure: 1.78,
+      skyZenith: [0.080, 0.170, 0.350], skyMid: [0.265, 0.345, 0.490], skyHaze: [0.640, 0.520, 0.395],
+      lift: [0.028, 0.038, 0.060], saturation: 1.28, contrast: 1.16,
+    },
+  },
+  blacksite: {
+    name: 'BLACKSITE',
+    blurb: 'Night refinery · floodlit',
+    build: (w) => w.buildBlacksite(),
+    atmosphere: {
+      // A low, cold "moon" plus heavy fog; the floodlights do the real lighting.
+      sunDir: [-0.32, 0.42, -0.85], sunColor: [0.52, 0.66, 1.0], sunIntensity: 0.75,
+      ambientTint: [0.55, 0.68, 1.0], ambientMul: 2.6,
+      fogColor: [0.055, 0.070, 0.105], fogDensity: 0.0100, fogHeight: 26,
+      cloudAmount: 0.25, exposure: 2.30,
+      skyZenith: [0.016, 0.028, 0.062], skyMid: [0.032, 0.052, 0.100], skyHaze: [0.090, 0.108, 0.160],
+      lift: [0.012, 0.020, 0.045], saturation: 1.10, contrast: 1.22,
+    },
+  },
+  dustbowl: {
+    name: 'DUSTBOWL',
+    blurb: 'Ruined village · high noon',
+    build: (w) => w.buildDustbowl(),
+    atmosphere: {
+      // Sun almost overhead: short hard shadows, bleached ground, dusty air.
+      sunDir: [0.18, 0.965, 0.19], sunColor: [1.0, 0.955, 0.88], sunIntensity: 4.9,
+      ambientTint: [0.86, 0.90, 1.0], ambientMul: 2.15,
+      fogColor: [0.60, 0.53, 0.44], fogDensity: 0.0060, fogHeight: 60,
+      cloudAmount: 0.30, exposure: 1.08,
+      skyZenith: [0.115, 0.235, 0.470], skyMid: [0.330, 0.430, 0.590], skyHaze: [0.720, 0.660, 0.560],
+      lift: [0.030, 0.028, 0.022], saturation: 1.12, contrast: 1.10,
+    },
+  },
+};
+
 /* ------------------------------------------------------------------ OBB */
 
 export class Collider {
@@ -65,7 +114,7 @@ class Batches {
 const _xf = m4();
 
 export class World {
-  constructor() {
+  constructor(mapId = 'scrapyard') {
     this.batches = new Batches();
     this.colliders = [];
     this.lights = [];          // static emissive point lights
@@ -73,7 +122,13 @@ export class World {
     this.cover = [];           // {x,z,h} cover positions for bots
     this.props = [];           // dynamic-ish decorative meshes (drawn per-frame)
     this.meshes = [];
-    this._build();
+    this.fires = [];
+    const def = MAPS[mapId] || MAPS.scrapyard;
+    this.mapId = MAPS[mapId] ? mapId : 'scrapyard';
+    this.info = def;
+    this.atmosphere = def.atmosphere;
+    def.build(this);
+    this._buildNav();
   }
 
   /* ------------------------------------------------------------ helpers */
@@ -111,6 +166,7 @@ export class World {
     concreteDark: { key: 'concreteDark', layer: MAT.CONCRETE, uvScale: [0.30, 0.30], tint: [0.62, 0.63, 0.66], macro: 0.30 },
     backdrop: { key: 'backdrop', layer: MAT.CONCRETE, uvScale: [0.10, 0.10], tint: [1.25, 1.12, 1.00], macro: 0.45, rough: 1.1, metal: 0 },
     steel: { key: 'steel', layer: MAT.CORRUGATED, uvScale: [0.30, 0.30], tint: [0.85, 0.86, 0.90], normalScale: 1.0 },
+    corrugated: { key: 'corrugated', layer: MAT.CORRUGATED, uvScale: [0.22, 0.22], tint: [0.62, 0.60, 0.58], normalScale: 1.15, macro: 0.30 },
     steelDark: { key: 'steelDark', layer: MAT.GUNMETAL, uvScale: [0.55, 0.55], tint: [0.85, 0.87, 0.95] },
     wood: { key: 'wood', layer: MAT.WOOD, uvScale: [0.42, 0.42], macro: 0.25 },
     sandbag: { key: 'sandbag', layer: MAT.SANDBAG, uvScale: [0.75, 0.75], macro: 0.30 },
@@ -272,14 +328,103 @@ export class World {
     // Emissive lamp head.
     const lm = { key: 'lampglow', layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.9, 0.9, 0.9], emissive: [3.2, 2.5, 1.5] };
     this.deco(lm, boxGeo(0.52, 0.07, 0.26), x + 0.62, h - 0.09, z);
-    this.lights.push({ x: x + 0.62, y: h - 0.35, z, r: 11.5, col: [1.0, 0.80, 0.52], i: 5.5 });
+    this.lights.push({ x: x + 0.62, y: h - 0.35, z, r: 13.0, col: [1.0, 0.80, 0.52], i: 95 });
   }
 
   addFireBarrel(x, z) {
     this.addBarrel(x, z);
-    this.lights.push({ x, y: 1.05, z, r: 8.5, col: [1.0, 0.52, 0.20], i: 6.0, flicker: true });
+    this.lights.push({ x, y: 1.05, z, r: 9.5, col: [1.0, 0.52, 0.20], i: 62, flicker: true });
     this.fires = this.fires || [];
     this.fires.push({ x, y: 0.92, z });
+  }
+
+  /** Large vertical storage tank with ribs, a roof and a maintenance ladder. */
+  addTank(x, z, r, h, mat) {
+    const m = mat || World.M.steel;
+    this.cyl(m, r, h, x, h / 2, z, 24, 0, null, 1);
+    // Banding ribs.
+    for (let i = 1; i < 4; i++) {
+      this.deco(World.M.steelDark, cylinderGeo(r * 1.02, 0.16, 24), x, (h / 4) * i, z);
+    }
+    // Domed roof and rail.
+    this.deco(m, cylinderGeo(r * 1.01, 0.5, 24, true, r * 0.72), x, h + 0.25, z);
+    this.addRailing(x, h + 0.5, z - r * 0.72, 0, r * 1.3, 0.7);
+    this.addLadder(x + r * 0.99, 0, z, Math.PI / 2, h);
+    // Outlet pipework at the base.
+    this.addPipeRun(x, 0.6, z + r + 0.25, 0, r * 2.2, 0.11);
+  }
+
+  /**
+   * Hollow building shell: four walls with a doorway on one side and an open
+   * top, so it reads as a ruin you can fight through rather than a solid block.
+   */
+  addRuin(x, z, w, d, h, ry, mat, doorSide = 0) {
+    const m = mat || World.M.brick;
+    const c = Math.cos(ry), s = Math.sin(ry);
+    const put = (lx, lz, lw, ld) => {
+      this.box(m, lw, h, ld, x + c * lx - s * lz, h / 2, z + s * lx + c * lz, ry, 1);
+    };
+    const t = 0.45;
+    const sides = [
+      [0, -d / 2, w, t], [0, d / 2, w, t],
+      [-w / 2, 0, t, d], [w / 2, 0, t, d],
+    ];
+    sides.forEach((sd, i) => {
+      if (i === doorSide) {
+        // Split the wall around a doorway.
+        const seg = (sd[2] > sd[3]) ? 'x' : 'z';
+        const len = seg === 'x' ? sd[2] : sd[3];
+        const gap = 1.7;
+        const piece = (len - gap) / 2;
+        for (const sgn of [-1, 1]) {
+          const off = sgn * (gap / 2 + piece / 2);
+          if (seg === 'x') put(sd[0] + off, sd[1], piece, sd[3]);
+          else put(sd[0], sd[1] + off, sd[2], piece);
+        }
+        // Lintel over the opening.
+        const lx = seg === 'x' ? sd[0] : sd[0];
+        const lz = seg === 'x' ? sd[1] : sd[1];
+        this.deco(World.M.concreteDark, boxGeo(seg === 'x' ? gap + 0.5 : 0.6, 0.35, seg === 'x' ? 0.6 : gap + 0.5),
+          x + c * lx - s * lz, h - 0.3, z + s * lx + c * lz, 0, ry, 0, 1, 1, 1, 1.4);
+      } else {
+        put(sd[0], sd[1], sd[2], sd[3]);
+      }
+    });
+    // Broken parapet.
+    for (let i = 0; i < 10; i++) {
+      const a = rnd(0, 6.28), rr = Math.max(w, d) * 0.5;
+      this.deco(m, boxGeo(rnd(0.4, 1.0), rnd(0.15, 0.5), 0.42),
+        x + Math.cos(a) * rr * rnd(0.7, 1), h + 0.15, z + Math.sin(a) * rr * rnd(0.7, 1), 0, rnd(0, 3.14), 0);
+    }
+  }
+
+  /** Fabric awning on poles — market stalls. */
+  addStall(x, z, ry) {
+    const m = World.M.tarp;
+    const c = Math.cos(ry), s = Math.sin(ry);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      this.deco(World.M.wood, cylinderGeo(0.045, 2.1, 6),
+        x + c * sx * 1.2 - s * sz * 0.9, 1.05, z + s * sx * 1.2 + c * sz * 0.9);
+    }
+    this.deco(m, boxGeo(2.7, 0.05, 2.1), x, 2.12, z, 0.06, ry, 0, 1, 1, 1, 1);
+    this.deco(World.M.wood, boxGeo(2.5, 0.08, 0.9), x, 0.95, z, 0, ry, 0, 1, 1, 1, 2);
+    this.colliders.push(new Collider(x, 0.5, z, 1.25, 0.5, 0.45, ry, 'wood'));
+    for (let i = 0; i < 3; i++) {
+      this.addCrate(x + c * rnd(-1, 1), z + s * rnd(-1, 1), 0, rnd(0.5, 0.8));
+    }
+  }
+
+  /** Tall floodlight mast — the primary light source on a night map. */
+  addFloodlight(x, z, h, col) {
+    const m = World.M.steelDark;
+    this.cyl(m, 0.16, h, x, h / 2, z, 10, 0, 0.11, 1.5);
+    for (const sgn of [-1, 1]) {
+      this.deco(m, boxGeo(0.9, 0.55, 0.30), x + sgn * 0.55, h - 0.2, z, 0, 0, sgn * 0.22);
+      this.deco({ key: 'floodglow', layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.9, 0.9, 0.9],
+        emissive: [col[0] * 7, col[1] * 7, col[2] * 7] },
+        boxGeo(0.72, 0.40, 0.06), x + sgn * 0.55, h - 0.24, z - 0.17, 0, 0, sgn * 0.22);
+      this.lights.push({ x: x + sgn * 0.8, y: h - 0.6, z: z - 0.5, r: 30, col, i: 620 });
+    }
   }
 
   /** Sagging cable between two points — catenary, in segments. */
@@ -338,7 +483,7 @@ export class World {
 
   /* -------------------------------------------------------------- layout */
 
-  _build() {
+  buildScrapyard() {
     const M = World.M;
     const CON = {
       red: World.container([1.0, 0.95, 0.92], 'conRed'),
@@ -488,7 +633,7 @@ export class World {
     this.deco(M.glass, boxGeo(0.06, 1.05, 2.2), shX + 1.72, deckY + 1.75, shZ);
     this.deco({ key: 'shacklight', layer: MAT.GUNMETAL, uvScale: [1, 1], emissive: [1.6, 2.6, 3.4] },
       boxGeo(0.10, 0.24, 0.24), shX + 1.75, deckY + 2.35, shZ + 1.1);
-    this.lights.push({ x: shX + 2.0, y: deckY + 2.3, z: shZ + 1.1, r: 7.5, col: [0.45, 0.72, 1.0], i: 3.0 });
+    this.lights.push({ x: shX + 2.0, y: deckY + 2.3, z: shZ + 1.1, r: 8.5, col: [0.45, 0.72, 1.0], i: 34 });
     // Derrick mast above the deck.
     for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       this.deco(M.steelDark, cylinderGeo(0.12, 6.4, 8), sx * 1.5, deckY + 3.3, sz * 1.5, 0.06 * sx, 0, 0.06 * sz);
@@ -503,7 +648,7 @@ export class World {
     // Beacon.
     this.deco({ key: 'beacon', layer: MAT.GUNMETAL, uvScale: [1, 1], emissive: [6.0, 0.7, 0.4] },
       sphereGeo(0.20, 12, 8), 0, deckY + 9.7, 0);
-    this.lights.push({ x: 0, y: deckY + 9.7, z: 0, r: 16, col: [1.0, 0.22, 0.14], i: 4.0, beacon: true });
+    this.lights.push({ x: 0, y: deckY + 9.7, z: 0, r: 18, col: [1.0, 0.22, 0.14], i: 55, beacon: true });
 
     /* ---- centre pad cover (the three-lane connective tissue) */
     this.addSandbags(-8.5, -6.0, 0, 5);
@@ -619,7 +764,199 @@ export class World {
       }
     }
 
-    this._buildNav();
+  }
+
+  /* ====================================================== MAP: BLACKSITE */
+  /**
+   * Night refinery. Vertical bulk — storage tanks and pipe racks — instead of
+   * Scrapyard's low container maze, so sightlines are long down the lanes and
+   * completely blocked across them. Lit almost entirely by floodlights, which
+   * makes the lanes pools of light with black gaps between.
+   */
+  buildBlacksite() {
+    const M = World.M;
+    // Ground: wet concrete apron over asphalt.
+    this.batches.get(M.sand.key, M.sand).add(planeGeo(320, 320, 8, 1), null, 1);
+    M4.compose(_xf, 0, 0.012, 0, 0, 0, 0);
+    this.batches.get(M.asphalt.key, M.asphalt).add(planeGeo(58, 58, 4, 1), _xf, 1);
+
+    // Perimeter fence walls.
+    const P = ARENA + 1.5;
+    for (const [ax, az, ry] of [[0, -P, 0], [0, P, 0], [-P, 0, Math.PI / 2], [P, 0, Math.PI / 2]]) {
+      const segs = Math.ceil((2 * P) / 4.2);
+      for (let i = 0; i < segs; i++) {
+        const t = (i - (segs - 1) / 2) * 4.2;
+        const c = Math.cos(ry), sn = Math.sin(ry);
+        this.box(M.corrugated, 4.18, 4.0, 0.4, ax + c * t, 2.0, az + sn * t, ry, 1);
+      }
+    }
+
+    // Four big tanks in a diamond — the map's defining silhouette.
+    this.addTank(-15, -15, 5.2, 11, M.steel);
+    this.addTank(15, 15, 5.2, 11, M.steel);
+    this.addTank(-16, 14, 4.2, 8.5, M.corrugated);
+    this.addTank(16, -14, 4.2, 8.5, M.corrugated);
+    // A smaller pair flanking the centre.
+    this.addTank(0, -24, 3.4, 7, M.steel);
+    this.addTank(0, 24, 3.4, 7, M.steel);
+
+    // Central gantry: raised deck linking the two big tanks, with stairs.
+    const gy = 4.6;
+    for (let i = 0; i < 9; i++) {
+      this.box(M.steelDark, 3.2, 0.18, 3.4, -12 + i * 3.0, gy, -12 + i * 3.0, Math.PI * 0.25, 1.6);
+    }
+    for (let i = 0; i < 9; i++) {
+      const x = -12 + i * 3.0, z = -12 + i * 3.0;
+      this.addRailing(x, gy + 0.09, z - 1.8, Math.PI * 0.25, 3.2, 1.0);
+      this.addRailing(x, gy + 0.09, z + 1.8, Math.PI * 0.25, 3.2, 1.0);
+      if (i % 3 === 0) this.cyl(M.steelDark, 0.14, gy, x, gy / 2, z, 8, 0, null, 1.5);
+    }
+    this.addStairs(-14.5, 0, -16.5, Math.PI * 0.25, 21, 0.22, 0.30, 1.6);
+    this.addStairs(14.5, 0, 16.5, Math.PI * 1.25, 21, 0.22, 0.30, 1.6);
+
+    // Pipe racks overhead, running the other diagonal.
+    for (let i = -3; i <= 3; i++) {
+      const x = i * 7, z = -i * 7;
+      this.cyl(M.steelDark, 0.18, 6.2, x - 3.5, 3.1, z - 3.5, 8, 0, null, 1.5);
+      this.cyl(M.steelDark, 0.18, 6.2, x + 3.5, 3.1, z + 3.5, 8, 0, null, 1.5);
+      this.deco(M.steelDark, boxGeo(0.22, 0.22, 10.5), x, 6.2, z, 0, Math.PI * 0.75, 0);
+    }
+    for (const off of [-0.55, -0.2, 0.2, 0.55]) {
+      this.addPipeRun(off * 1.4, 6.5 + off * 0.3, -off * 1.4, Math.PI * 0.75, 46, 0.13);
+    }
+
+    // Cover: pump housings, valve skids, jersey barriers.
+    const skids = [[-7, 3], [7, -3], [-3, -8], [3, 8], [-10, 8], [10, -8], [-20, 2], [20, -2]];
+    for (const [x, z] of skids) {
+      this.box(M.steelDark, 2.6, 1.15, 1.7, x, 0.575, z, rnd(-0.3, 0.3), 1.4);
+      this.deco(M.steel, cylinderGeo(0.34, 0.9, 12), x + 0.7, 1.6, z);
+      this.deco(M.barrel, cylinderGeo(0.22, 0.7, 10), x - 0.7, 1.5, z, Math.PI / 2, rnd(0, 3), 0);
+      this.addPipeRun(x, 1.5, z + 1.0, 0, 2.4, 0.07);
+    }
+    for (const [x, z, r] of [[-5, -18, 0], [5, 18, 0], [-18, -5, Math.PI / 2], [18, 5, Math.PI / 2]]) {
+      this.addJersey(x, z, r); this.addJersey(x + Math.cos(r) * 2.4, z + Math.sin(r) * 2.4, r);
+    }
+    for (let i = 0; i < 20; i++) {
+      const x = rnd(-27, 27), z = rnd(-27, 27);
+      if (Math.hypot(x, z) < 6) continue;
+      if (R() < 0.5) this.addBarrel(x, z); else this.addCrate(x, z, 0, rnd(0.8, 1.2));
+    }
+
+    // Floodlights are the map. Cold on the perimeter, sodium in the middle.
+    this.addFloodlight(-24, -24, 9.5, [0.62, 0.74, 1.0]);
+    this.addFloodlight(24, 24, 9.5, [0.62, 0.74, 1.0]);
+    this.addFloodlight(-24, 24, 9.5, [0.70, 0.78, 1.0]);
+    this.addFloodlight(24, -24, 9.5, [0.70, 0.78, 1.0]);
+    this.addFloodlight(-9, 9, 8.0, [1.0, 0.72, 0.34]);
+    this.addFloodlight(9, -9, 8.0, [1.0, 0.72, 0.34]);
+    this.addFireBarrel(-13, 20);
+    this.addFireBarrel(13, -20);
+
+    const grid = [[-1.8, -1.8], [0, -2.2], [1.8, -1.8], [-2.2, 0], [2.2, 0], [-1.8, 1.8], [1.8, 1.8], [0, 2.2]];
+    for (const [ox, oz] of grid) {
+      this.spawns[0].push({ x: -27 + ox, z: 27 + oz, yaw: Math.PI * 0.75 });
+      this.spawns[1].push({ x: 27 + ox, z: -27 + oz, yaw: Math.PI * 1.75 });
+    }
+    this._coverFromColliders();
+  }
+
+  /* ======================================================= MAP: DUSTBOWL */
+  /**
+   * A ruined village at hard midday. Adobe shells with doorways make a proper
+   * warren — short sightlines, lots of corners, and roofs you cannot reach, so
+   * fights stay on the ground and close.
+   */
+  buildDustbowl() {
+    const M = World.M;
+    this.batches.get(M.sand.key, M.sand).add(planeGeo(320, 320, 8, 1), null, 1);
+
+    // Low perimeter wall, broken in places.
+    const P = ARENA + 1.0;
+    for (const [ax, az, ry] of [[0, -P, 0], [0, P, 0], [-P, 0, Math.PI / 2], [P, 0, Math.PI / 2]]) {
+      const segs = Math.ceil((2 * P) / 3.6);
+      for (let i = 0; i < segs; i++) {
+        if (i === 3 || i === segs - 4) continue;      // gaps
+        const t = (i - (segs - 1) / 2) * 3.6;
+        const c = Math.cos(ry), sn = Math.sin(ry);
+        const h = 2.6 + (i % 3) * 0.3;
+        this.box(M.brick, 3.55, h, 0.5, ax + c * t, h / 2, az + sn * t, ry, 1);
+      }
+    }
+
+    // Village blocks: three lanes emerge from the gaps between shells.
+    const houses = [
+      [-19, -18, 9, 8, 4.2, 0.1, 1], [-8, -20, 8, 7, 3.4, -0.05, 0],
+      [8, -17, 10, 8, 5.0, 0.06, 2], [20, -17, 8, 9, 3.8, 0, 3],
+      [-21, -3, 8, 10, 4.6, 0.04, 1], [-9, -4, 7, 7, 3.2, 0.1, 0],
+      [10, -3, 9, 9, 4.4, -0.06, 3], [21, -2, 7, 8, 3.6, 0, 2],
+      [-19, 13, 9, 8, 4.0, 0.05, 1], [-7, 15, 7, 7, 3.4, 0, 0],
+      [9, 14, 9, 8, 4.8, -0.04, 3], [21, 15, 8, 8, 3.6, 0.08, 2],
+      [-3, 25, 8, 7, 3.8, 0, 0], [4, -27, 8, 7, 3.6, 0, 1],
+    ];
+    for (const [x, z, w, d, h, ry, door] of houses) {
+      this.addRuin(x, z, w, d, h, ry, M.brick, door);
+    }
+
+    // Central plaza: a well, stalls and sandbag positions.
+    this.cyl(M.concreteDark, 1.5, 1.0, 0, 0.5, 0, 16, 0, null, 1.2);
+    this.deco(M.concreteDark, cylinderGeo(1.62, 0.22, 16), 0, 1.0, 0);
+    for (const sgn of [-1, 1]) {
+      this.deco(M.wood, cylinderGeo(0.09, 2.6, 6), sgn * 1.3, 2.3, 0);
+    }
+    this.deco(M.wood, boxGeo(3.0, 0.16, 0.16), 0, 3.55, 0);
+    this.addStall(-5, 3, 0.3);
+    this.addStall(5.5, -3, -0.2);
+    this.addStall(-4, -6, 1.4);
+    this.addStall(4, 6.5, 1.7);
+    this.addSandbags(-8, 0, Math.PI / 2, 5);
+    this.addSandbags(8, 0, Math.PI / 2, 5);
+    this.addSandbags(0, -9, 0, 5);
+    this.addSandbags(0, 9, 0, 5);
+
+    // Rubble spill from the ruins, plus burnt-out clutter.
+    for (let i = 0; i < 120; i++) {
+      const x = rnd(-30, 30), z = rnd(-30, 30);
+      const sz = rnd(0.18, 0.6);
+      this.deco(M.brick, boxGeo(sz, sz * rnd(0.4, 0.9), sz * rnd(0.7, 1.3)),
+        x, sz * 0.2, z, rnd(0, 3.1), rnd(0, 6.28), rnd(0, 3.1));
+    }
+    for (let i = 0; i < 26; i++) {
+      const x = rnd(-28, 28), z = rnd(-28, 28);
+      if (Math.hypot(x, z) < 3) continue;
+      const k = R();
+      if (k < 0.35) this.addCrate(x, z, 0, rnd(0.8, 1.3));
+      else if (k < 0.6) this.addBarrel(x, z);
+      else if (k < 0.8) this.addJersey(x, z, rnd(0, 3.1));
+      else this.addTireStack(x, z, 2 + ((R() * 3) | 0));
+    }
+    for (let i = 0; i < 12; i++) this.addStain(rnd(-26, 26), rnd(-26, 26), rnd(1, 3), M.sandPatch);
+
+    // Palms-as-poles with cabling between them, for vertical interest.
+    for (const [x, z] of [[-14, 6], [14, -6], [-14, -10], [14, 10]]) this.addLamp(x, z, 5.6);
+    this.addCable(-14, 5.3, 6, 14, 5.3, -6, 1.6, 14);
+    this.addCable(-14, 5.3, -10, 14, 5.3, 10, 1.6, 14);
+    this.addFireBarrel(-11, 20);
+    this.addFireBarrel(11, -20);
+
+    const grid = [[-1.8, -1.8], [0, -2.2], [1.8, -1.8], [-2.2, 0], [2.2, 0], [-1.8, 1.8], [1.8, 1.8], [0, 2.2]];
+    for (const [ox, oz] of grid) {
+      this.spawns[0].push({ x: -28 + ox, z: 6 + oz, yaw: Math.PI * 1.5 });
+      this.spawns[1].push({ x: 28 + ox, z: -6 + oz, yaw: Math.PI * 0.5 });
+    }
+    this._coverFromColliders();
+  }
+
+  /** Shared: derive bot cover points from waist-high geometry. */
+  _coverFromColliders() {
+    for (const c of this.colliders) {
+      if (c.top < 0.55 || c.top > 2.2 || c.bottom > 0.4) continue;
+      const r = Math.max(c.h[0], c.h[2]) + 0.75;
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2 + 0.4;
+        const x = c.c[0] + Math.cos(a) * r, z = c.c[2] + Math.sin(a) * r;
+        if (Math.abs(x) < ARENA - 1 && Math.abs(z) < ARENA - 1) this.cover.push({ x, z, h: c.top });
+      }
+    }
   }
 
   /* ---------------------------------------------------------- navigation */

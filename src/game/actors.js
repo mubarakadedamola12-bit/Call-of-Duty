@@ -1,142 +1,45 @@
 // Character model, movement/collision, and bot AI.
 
-import { Builder, boxGeo, cylinderGeo, sphereGeo, capsuleGeo } from '../render/geometry.js';
-import { MAT } from '../render/textures.js';
-import { defaultMaterial } from '../render/renderer.js';
 import { M4, V3, m4, v3, clamp, lerp, damp, rand, smoothstep } from '../core/math.js';
+import { poseSoldier, hipHeight } from './soldier.js';
 import { ARENA } from './world.js';
 
 /* --------------------------------------------------------- soldier model */
 
-const PARTMAT = {
-  camo: { layer: MAT.FATIGUES, uvScale: [2.2, 2.2], rough: 1, metal: 1 },
-  gear: { layer: MAT.POLYMER, uvScale: [4.0, 4.0], tint: [0.85, 0.88, 0.92], rough: 1, metal: 1 },
-  gearTan: { layer: MAT.POLYMER, uvScale: [4.0, 4.0], tint: [2.6, 2.1, 1.35], rough: 1, metal: 1 },
-  metal: { layer: MAT.GUNMETAL, uvScale: [3, 3], rough: 1, metal: 1 },
-  glass: { layer: MAT.GLASSDIRT, uvScale: [2, 2], tint: [1.6, 1.4, 1.0], rough: 0.30, metal: 1 },
-};
+/* --------------------------------------------------------------- actors */
+// The soldier mesh and rig live in soldier.js; this module keeps movement,
+// hitboxes and AI. drawSoldier() below just evaluates a pose and submits.
 
 /**
- * Builds one body part as a SINGLE mesh, with the per-material differences
- * baked into per-vertex layer/tint. A rig drawn material-by-material cost ~28
- * draw calls per soldier, times three passes, times nine bots — which was most
- * of the frame. This makes it one draw per bone instead.
+ * Evaluates an actor's rig and submits it as a single skinned draw.
+ * @param rig { mesh, skeleton, pose } per team
  */
-function partBuilder(camoTint) {
-  const b = new Builder();
-  const vm = (name) => {
-    const d = PARTMAT[name];
-    // Team colour is baked into the fatigues at build time rather than applied
-    // as a draw uniform, because the whole bone is now a single mesh.
-    if (name === 'camo' && camoTint) return { layer: d.layer, tint: camoTint };
-    return { layer: d.layer, tint: d.tint || [1, 1, 1] };
-  };
-  const uvOf = (name) => PARTMAT[name].uvScale[0];
-  const m = m4();
-  const api = {
-    box(name, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0, uvS = 1) {
-      M4.compose(m, x, y, z, rx, ry, rz);
-      b.add(boxGeo(w, h, d), m, uvS * uvOf(name), [0, 0], vm(name)); return api;
-    },
-    sph(name, r, x, y, z, sx = 1, sy = 1, sz = 1, uvS = 1) {
-      M4.compose(m, x, y, z, 0, 0, 0, sx, sy, sz);
-      b.add(sphereGeo(r, 14, 10), m, uvS * uvOf(name), [0, 0], vm(name)); return api;
-    },
-    cap(name, r, h, x, y, z, rx = 0, ry = 0, rz = 0) {
-      M4.compose(m, x, y, z, rx, ry, rz);
-      b.add(capsuleGeo(r, h, 12, 8), m, uvOf(name), [0, 0], vm(name)); return api;
-    },
-    cyl(name, r, h, x, y, z, rx = 0, ry = 0, rz = 0, seg = 12) {
-      M4.compose(m, x, y, z, rx, ry, rz);
-      b.add(cylinderGeo(r, h, seg), m, uvOf(name), [0, 0], vm(name)); return api;
-    },
-    build(gl) {
-      // uvScale is already folded into the vertex UVs, so the shared material
-      // only has to carry the shading constants.
-      const mat = defaultMaterial();
-      mat.uvScale = [1, 1];
-      mat.rough = 1; mat.metal = 1;
-      return [{ mesh: b.build(gl), mat, name: 'body' }];
-    },
-  };
-  return api;
+export function drawSoldier(renderer, rig, actor, teamMat, time) {
+  const p = actor.pos;
+  const anim = actor.anim;
+  const dead = !!actor.dead;
+  const crouch = actor.crouchAmt || 0;
+
+  poseSoldier(rig.pose, {
+    speed: anim.speed,
+    phase: anim.phase,
+    aim: dead ? 0 : (actor.aimAmt === undefined ? 1 : actor.aimAmt),
+    crouch,
+    pitch: dead ? 0 : (actor.pitch || 0),
+    headYaw: actor.headYaw || 0,
+    dead,
+    time,
+  });
+
+  const y = p[1] + hipHeight(crouch, dead) + (dead ? anim.deathDrop : anim.bob);
+  const palette = rig.skeleton.evaluate(
+    rig.pose, p[0], y, p[2], actor.yaw,
+    dead ? anim.deathPitch : 0, dead ? anim.deathRoll : 0,
+  );
+  renderer.drawSkinned(rig.mesh, IDENTITY4, palette, teamMat.body, true);
 }
 
-/**
- * Body parts are modelled around their joint pivot so the animation code can
- * just rotate them. Rig is: pelvis -> torso -> head, and limbs off those.
- */
-/** @param camoTint per-team fatigue colour, baked into the mesh. */
-export function buildSoldier(gl, camoTint) {
-  const parts = {};
-  const partBuilderT = () => partBuilder(camoTint);
-
-  // --- torso (pivot at the waist)
-  let p = partBuilderT();
-  p.box('camo', 0.40, 0.30, 0.23, 0, 0.16, 0);
-  p.box('camo', 0.44, 0.20, 0.25, 0, 0.40, 0);
-  p.box('gear', 0.42, 0.30, 0.27, 0, 0.24, 0.005, 0, 0, 0, 1.6);        // plate carrier
-  p.box('gearTan', 0.10, 0.09, 0.05, -0.13, 0.24, -0.145, 0, 0, 0, 3);   // mag pouches
-  p.box('gearTan', 0.10, 0.09, 0.05, 0.00, 0.24, -0.150, 0, 0, 0, 3);
-  p.box('gearTan', 0.10, 0.09, 0.05, 0.13, 0.24, -0.145, 0, 0, 0, 3);
-  p.box('gearTan', 0.09, 0.10, 0.05, -0.13, 0.11, -0.145, 0, 0, 0, 3);
-  p.box('gear', 0.26, 0.30, 0.16, 0, 0.26, 0.19, 0, 0, 0, 2);            // pack
-  p.box('gearTan', 0.20, 0.10, 0.06, 0, 0.14, 0.25, 0, 0, 0, 3);
-  p.cyl('metal', 0.035, 0.16, 0.11, 0.42, 0.18, 0.2, 0, 0);              // antenna
-  p.box('gear', 0.075, 0.075, 0.055, -0.16, 0.36, -0.10, 0, 0, 0.4, 3);  // radio
-  parts.torso = p.build(gl);
-
-  // --- head (pivot at the neck)
-  p = partBuilderT();
-  p.sph('gear', 0.107, 0, 0.115, 0.005, 1.06, 1.16, 1.14, 2.0);          // helmet
-  p.box('gear', 0.215, 0.045, 0.10, 0, 0.115, -0.085, 0.28, 0, 0, 2.5);  // brim
-  p.sph('camo', 0.093, 0, 0.10, 0, 1, 1.10, 1.02, 2.5);                  // balaclava
-  p.box('camo', 0.15, 0.10, 0.02, 0, 0.085, -0.098, 0, 0, 0, 3);
-  p.box('glass', 0.175, 0.052, 0.035, 0, 0.128, -0.078, 0.05, 0, 0, 2);  // goggles
-  p.box('gear', 0.205, 0.028, 0.06, 0, 0.145, 0.005, 0, 0, 0, 3);        // strap
-  p.box('metal', 0.045, 0.075, 0.045, 0.055, 0.185, -0.055, 0.3, 0, 0);  // NVG mount
-  p.cyl('metal', 0.026, 0.075, 0.055, 0.215, -0.075, 1.57, 0, 0, 10);
-  parts.head = p.build(gl);
-
-  // --- upper arm (pivot at shoulder, extends -Y)
-  p = partBuilderT();
-  p.cap('camo', 0.058, 0.13, 0, -0.105, 0);
-  p.box('gear', 0.105, 0.075, 0.098, 0, -0.020, 0, 0, 0, 0, 2.2);        // shoulder pad
-  parts.upperArm = p.build(gl);
-
-  // --- lower arm + glove
-  p = partBuilderT();
-  p.cap('camo', 0.049, 0.115, 0, -0.095, 0);
-  p.box('gear', 0.075, 0.070, 0.062, 0, -0.190, 0, 0, 0, 0, 2.6);
-  parts.lowerArm = p.build(gl);
-
-  // --- thigh
-  p = partBuilderT();
-  p.cap('camo', 0.077, 0.17, 0, -0.135, 0);
-  p.box('gearTan', 0.10, 0.11, 0.055, 0.055, -0.165, 0, 0, 0, 0, 3);     // drop pouch
-  parts.thigh = p.build(gl);
-
-  // --- shin + boot
-  p = partBuilderT();
-  p.cap('camo', 0.062, 0.16, 0, -0.125, 0);
-  p.box('gear', 0.098, 0.075, 0.235, 0, -0.245, -0.035, 0, 0, 0, 2.2);   // boot
-  p.box('gear', 0.104, 0.030, 0.245, 0, -0.278, -0.035, 0, 0, 0, 2.6);   // sole
-  parts.shin = p.build(gl);
-
-  // --- pelvis
-  p = partBuilderT();
-  p.box('camo', 0.32, 0.19, 0.21, 0, -0.06, 0);
-  p.box('gearTan', 0.35, 0.075, 0.23, 0, 0.01, 0, 0, 0, 0, 2.2);         // belt
-  p.box('gear', 0.075, 0.11, 0.05, 0.155, -0.06, 0.02, 0, 0, 0, 3);      // holster
-  parts.pelvis = p.build(gl);
-
-  // --- team marker (emissive strip on the shoulder)
-  p = partBuilderT();
-  p.box('metal', 0.11, 0.035, 0.09, 0, 0, 0);
-  parts.marker = p.build(gl);
-
-  return parts;
-}
+const IDENTITY4 = m4();
 
 /* ------------------------------------------------------- movement/collide */
 
@@ -322,95 +225,6 @@ export function rayHitActor(o, d, actor, maxT) {
   if (!zone) return null;
   hitPoint = [o[0] + d[0] * best, o[1] + d[1] * best, o[2] + d[2] * best];
   return { t: best, zone, point: hitPoint, mul: HITBOX[zone].mul };
-}
-
-/* -------------------------------------------------------------- animation */
-
-const _m = m4();
-
-/** Evaluates the rig and pushes every part into the renderer. */
-export function drawSoldier(renderer, parts, actor, teamMat, time) {
-  const p = actor.pos;
-  const yaw = actor.yaw;
-  const anim = actor.anim;
-  const crouch = actor.crouchAmt || 0;
-  const dead = actor.dead;
-
-  const speed = anim.speed;
-  const phase = anim.phase;
-  const swing = Math.sin(phase) * Math.min(1, speed / 5.5);
-  const swing2 = Math.sin(phase * 2);
-  const bob = anim.bob;
-
-  const hipY = (0.92 - crouch * 0.30) + bob + (dead ? anim.deathDrop : 0);
-  const lean = dead ? 0 : -Math.min(0.20, speed * 0.022);
-  const deathPitch = dead ? anim.deathPitch : 0;
-  const deathRoll = dead ? anim.deathRoll : 0;
-
-  // One draw per bone. Team colour rides on the shared material's tint, which
-  // multiplies the per-vertex tint baked into the mesh.
-  const draw = (list, mx) => {
-    for (const part of list) renderer.draw(part.mesh, mx, teamMat.body, true);
-  };
-
-  // Pelvis
-  M4.compose(_m, p[0], p[1] + hipY, p[2], deathPitch, yaw, deathRoll);
-  draw(parts.pelvis, _m);
-  const pelvis = m4(); pelvis.set(_m);
-
-  // Torso
-  const torsoPitch = lean + deathPitch * 0.35 + Math.sin(time * 1.6) * 0.012;
-  const torsoYaw = yaw + swing2 * 0.035 * Math.min(1, speed / 5);
-  M4.compose(_m, p[0], p[1] + hipY + 0.06, p[2], torsoPitch, torsoYaw, deathRoll);
-  const torso = m4(); torso.set(_m);
-  draw(parts.torso, _m);
-
-  const local = (parent, x, y, z, rx, ry, rz, out) => {
-    const t = m4();
-    M4.compose(t, x, y, z, rx, ry, rz);
-    M4.mul(out, parent, t);
-    return out;
-  };
-  const tmp = m4();
-
-  // Head — bots look where they aim.
-  const headPitch = clamp(actor.pitch || 0, -0.7, 0.7) * (dead ? 0.2 : 1);
-  local(torso, 0, 0.52, 0, headPitch - torsoPitch * 0.6, (actor.headYaw || 0), 0, tmp);
-  draw(parts.head, tmp);
-
-  // Arms: when armed, both hands are forward on the weapon.
-  const aim = dead ? 0 : (actor.aimAmt === undefined ? 1 : actor.aimAmt);
-  for (const side of [-1, 1]) {
-    const sx = side * 0.225;
-    const armSwing = swing * side * 0.55 * (1 - aim);
-    const upPitch = lerp(armSwing, side < 0 ? -1.30 : -1.15, aim);
-    const upRoll = lerp(side * 0.10, side < 0 ? 0.34 : -0.18, aim);
-    local(torso, sx, 0.40, 0.0, upPitch, 0, upRoll, tmp);
-    draw(parts.upperArm, tmp);
-    const elbow = m4(); elbow.set(tmp);
-    const loPitch = lerp(0.22 + Math.max(0, -armSwing) * 0.5, side < 0 ? 1.05 : 0.62, aim);
-    local(elbow, 0, -0.21, 0, loPitch, 0, 0, tmp);
-    draw(parts.lowerArm, tmp);
-  }
-
-  // Legs
-  for (const side of [-1, 1]) {
-    const sx = side * 0.105;
-    const legSwing = -swing * side * 0.72;
-    const crouchBend = crouch * 0.75;
-    const thighPitch = dead ? deathPitch * 0.4 + side * 0.12 : legSwing - crouchBend;
-    local(pelvis, sx, -0.10, 0, thighPitch, 0, 0, tmp);
-    draw(parts.thigh, tmp);
-    const knee = m4(); knee.set(tmp);
-    const shinBend = dead ? 0.25
-      : Math.max(0, -legSwing * 1.1) * 0.9 + crouchBend * 1.6 + 0.06;
-    local(knee, 0, -0.28, 0, shinBend, 0, 0, tmp);
-    draw(parts.shin, tmp);
-  }
-
-  // Team marker on the left shoulder.
-  local(torso, -0.245, 0.40, 0.02, 0, 0, 0.25, tmp);
-  for (const part of parts.marker) renderer.draw(part.mesh, tmp, teamMat.marker, false);
 }
 
 /* ------------------------------------------------------------------- BOTS */

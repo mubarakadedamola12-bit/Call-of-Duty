@@ -13,6 +13,7 @@ precision highp int;
 `;
 
 export const EM_SCALE = 12.0;
+export const MAX_BONES = 24;
 
 /* ------------------------------------------------------------ shared GLSL */
 
@@ -56,18 +57,20 @@ const SKY = `
 uniform vec3  uSunDir;       // points TOWARD the sun
 uniform vec3  uSunColor;
 uniform float uTime;
+// Sky gradient, supplied per map — the same geometry under a different sky is
+// most of what makes one location feel unlike another.
+uniform vec3  uSkyZenith;
+uniform vec3  uSkyMid;
+uniform vec3  uSkyHaze;
+uniform vec3  uGroundBounce;
 
 // Cheap analytic sky — also used as the ambient/specular environment.
 vec3 skyBase(vec3 d){
   float h = sat(d.y * 0.5 + 0.5);
   float horizon = pow(1.0 - sat(abs(d.y)), 4.5);
 
-  vec3 zenith  = vec3(0.080, 0.170, 0.350);
-  vec3 mid     = vec3(0.265, 0.345, 0.490);
-  vec3 haze    = vec3(0.640, 0.520, 0.395);
-
-  vec3 col = mix(mid, zenith, pow(sat(d.y), 0.50));
-  col = mix(col, haze, horizon * 0.92);
+  vec3 col = mix(uSkyMid, uSkyZenith, pow(sat(d.y), 0.50));
+  col = mix(col, uSkyHaze, horizon * 0.92);
 
   // Warm forward-scattering lobe around the sun.
   float sd = sat(dot(d, uSunDir));
@@ -76,7 +79,7 @@ vec3 skyBase(vec3 d){
   col += vec3(0.55,0.32,0.16) * horizon * pow(sat(dot(normalize(vec3(d.x,0.0,d.z)), normalize(vec3(uSunDir.x,0.0,uSunDir.z)))), 3.0) * 0.55;
 
   // Ground bounce below the horizon (desert).
-  col = mix(col, vec3(0.205, 0.160, 0.110), sat(-d.y * 3.2));
+  col = mix(col, uGroundBounce, sat(-d.y * 3.2));
   return col;
 }
 
@@ -209,6 +212,67 @@ void main(){
   oAlbedo = vec4(base, clamp(alb.a * uAOMul, 0.0, 1.0));
   oNormal = vec4(Nw, clamp(srf.b * uRoughMul, 0.055, 1.0));
   oMisc   = vec4(uEmissive / EM_SCALE, clamp(srf.a * uMetalMul, 0.0, 1.0));
+}`;
+
+
+/* ---------------------------------------------------------- skinned pass */
+
+const SKIN_ATTRS = `
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUV;
+layout(location=3) in vec4 aTan;
+layout(location=4) in float aLayer;
+layout(location=5) in vec3 aTint;
+layout(location=6) in vec4 aBoneIdx;
+layout(location=7) in vec4 aBoneWt;
+
+uniform mat4 uBones[${MAX_BONES}];
+
+// Linear blend skinning. Four influences is plenty for a body this size, and
+// the weights are normalised at build time so they always sum to one.
+mat4 skinMatrix(){
+  return uBones[int(aBoneIdx.x)] * aBoneWt.x
+       + uBones[int(aBoneIdx.y)] * aBoneWt.y
+       + uBones[int(aBoneIdx.z)] * aBoneWt.z
+       + uBones[int(aBoneIdx.w)] * aBoneWt.w;
+}
+`;
+
+export const skinnedGbufferVS = HV + SKIN_ATTRS + `
+uniform mat4 uVP;
+uniform mat4 uModel;
+
+out vec3 vW;
+out vec3 vN;
+out vec2 vUV;
+out vec3 vT;
+out float vTW;
+flat out float vLayer;
+out vec3 vTint;
+
+void main(){
+  mat4 S = skinMatrix();
+  mat4 M = uModel * S;
+  vec4 wp = M * vec4(aPos, 1.0);
+  // The skinning matrix is rigid per-bone, so the upper 3x3 is safe for
+  // normals without a separate inverse-transpose.
+  mat3 nm = mat3(M);
+  vW  = wp.xyz;
+  vN  = normalize(nm * aNrm);
+  vT  = normalize(nm * aTan.xyz);
+  vTW = aTan.w;
+  vUV = aUV;
+  vLayer = aLayer;
+  vTint = aTint;
+  gl_Position = uVP * wp;
+}`;
+
+export const skinnedShadowVS = HV + SKIN_ATTRS + `
+uniform mat4 uLightVP;
+uniform mat4 uModel;
+void main(){
+  gl_Position = uLightVP * uModel * skinMatrix() * vec4(aPos, 1.0);
 }`;
 
 /* ---------------------------------------------------------------- shadow */

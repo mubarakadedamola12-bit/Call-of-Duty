@@ -1,14 +1,15 @@
 // Match logic: player controller, ballistics, bot AI, killstreaks, scoring.
 
 import { M4, V3, m4, v3, clamp, lerp, damp, smoothstep, rand, TAU } from '../core/math.js';
-import { World, ARENA } from './world.js';
+import { World, ARENA, MAPS } from './world.js';
 import { FX } from './fx.js';
 import { buildAllWeapons, recoilStep, GRENADE } from './weapons.js';
 import { Viewmodel, buildHands } from './viewmodel.js';
 import {
-  buildSoldier, drawSoldier, moveEntity, rayHitActor, groundAt, collideXZ,
+  drawSoldier, moveEntity, rayHitActor, groundAt, collideXZ,
   Bot, NavAgent, STATE,
 } from './actors.js';
+import { buildSoldier, makeSkeleton, makePose } from './soldier.js';
 import { defaultMaterial } from '../render/renderer.js';
 import { MAT } from '../render/textures.js';
 
@@ -69,33 +70,32 @@ export const STREAKS = [
 ];
 
 export class Game {
-  constructor(gl, renderer, audio, input, hud, difficulty = 'regular') {
+  constructor(gl, renderer, audio, input, hud, difficulty = 'regular', mapId = 'scrapyard') {
     this.diff = { ...(DIFFICULTY[difficulty] || DIFFICULTY.regular) };
     this.difficultyKey = DIFFICULTY[difficulty] ? difficulty : 'regular';
+    this.mapId = MAPS[mapId] ? mapId : 'scrapyard';
     this.gl = gl; this.renderer = renderer; this.audio = audio;
     this.input = input; this.hud = hud;
 
-    this.world = new World();
+    this.world = new World(this.mapId);
+    // The map owns its own light and colour; adopt it before anything renders.
+    renderer.applyAtmosphere(this.world.atmosphere);
     this.worldMeshes = this.world.upload(gl);
     this.fx = new FX(this.world);
     this.weapons = buildAllWeapons(gl);
-    // One baked rig per team — see buildSoldier().
+    // One skinned rig per team: the mesh is baked with the team's fatigue
+    // colour, and each carries its own skeleton and reusable pose buffer.
     this.soldiers = [
-      buildSoldier(gl, [0.72, 0.86, 1.25]),
-      buildSoldier(gl, [1.30, 0.86, 0.70]),
+      { mesh: buildSoldier(gl, [0.62, 0.80, 1.30]), skeleton: makeSkeleton(), pose: makePose() },
+      { mesh: buildSoldier(gl, [1.34, 0.92, 0.66]), skeleton: makeSkeleton(), pose: makePose() },
     ];
     this.vm = new Viewmodel(buildHands(gl));
     this.nav = new NavAgent(this.world);
 
     // The rig itself carries its materials per-vertex; these only supply the
     // shading constants and the emissive team marker.
-    const bodyMat = () => this._mat({ uvScale: [1, 1], rough: 1, metal: 1 });
-    this.teamMat = [
-      { body: bodyMat(),
-        marker: this._mat({ layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.1, 0.1, 0.1], emissive: [0.25, 1.4, 3.4] }) },
-      { body: bodyMat(),
-        marker: this._mat({ layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.1, 0.1, 0.1], emissive: [3.6, 0.35, 0.18] }) },
-    ];
+    const bodyMat = () => this._mat({ uvScale: [1, 1], rough: 1, metal: 1, normalScale: 1.1 });
+    this.teamMat = [{ body: bodyMat() }, { body: bodyMat() }];
 
     // ---- player
     this.player = {

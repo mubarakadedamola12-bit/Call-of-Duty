@@ -1,4 +1,4 @@
-# OPERATION BLACKOUT — *Scrapyard*
+# OPERATION BLACKOUT
 
 A Call of Duty–inspired first-person shooter that runs in the browser. Written
 from scratch in JavaScript on raw **WebGL2** — no game engine, no 3D library, no
@@ -24,6 +24,40 @@ Append `?touch=1` to any URL to force the mobile build — useful for checking t
 touch layout from a desktop browser.
 
 ---
+
+## Battlegrounds
+
+Three maps, selectable in Settings → Gameplay (applies on the next match):
+
+| | | |
+|---|---|---|
+| **SCRAPYARD** | Desert container yard, golden hour | Three lanes: a container corridor, an open pad with a climbable derrick, a warehouse |
+| **BLACKSITE** | Night refinery, floodlit | Storage tanks and overhead pipe racks; long lanes, blind crossings, pools of light |
+| **DUSTBOWL** | Ruined village, high noon | Adobe shells with doorways — a warren of corners and short sightlines |
+
+Each map owns an atmosphere preset (sun angle and colour, ambient, fog, cloud
+cover, sky gradient, exposure, grade) applied wholesale to the renderer. The
+same geometry under a different sky reads as a different place, so this is
+doing as much work as the layouts are.
+
+## Characters
+
+Soldiers are a single skinned mesh over a 19-bone rig, not a stack of
+primitives. The body is lofted through elliptical cross-sections — bodies are
+wider than they are deep, and a chest that is 1.5× wider than it is thick is
+most of what sells a silhouette as human. Vertices are weighted across two
+bones at every joint, so elbows and knees bend instead of coming apart.
+
+Proportions are a ~1.78 m adult at roughly 7.4 heads tall. Anatomy that
+mattered: a deltoid bulge so the shoulder is not a pipe in a socket, a calf
+belly above a thin ankle, a jaw so the head is not a ball, and gear (plate
+carrier, pouches, pack, helmet) as separate volumes sitting proud of the body.
+
+Skinning also cut the cost: one draw call per soldier instead of 28.
+
+**Ceiling worth stating plainly:** this is a stylised human, not a photoreal
+one. Photoreal characters need scanned geometry and authored albedo/normal/
+roughness maps — assets, not code. Everything here is generated at runtime.
 
 ## What the research fed into
 
@@ -206,8 +240,9 @@ index.html          shell + briefing screen
 styles.css
 src/main.js         bootstrap, settings, frame loop
 src/core/           math · WebGL2 wrapper · input · touch controls · procedural audio
-src/render/         renderer · shaders (GLSL) · procedural materials · geometry
-src/game/           world · game rules · actors/AI · weapons · viewmodel · fx · hud
+src/render/         renderer · shaders (GLSL) · materials · geometry · skinning
+src/game/           world/maps · game rules · soldier rig · actors/AI · weapons
+                    viewmodel · fx · hud
 ```
 
 ## Settings
