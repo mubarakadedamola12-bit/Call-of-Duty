@@ -151,6 +151,15 @@ export class Mesh {
     gl.bindVertexArray(this.vao);
     gl.drawElementsInstanced(gl.TRIANGLES, this.count, this.type, 0, n);
   }
+  /** Frees the GL objects. Meshes outlive JS GC otherwise. */
+  dispose() {
+    const gl = this.gl;
+    if (this.vao) gl.deleteVertexArray(this.vao);
+    if (this.vbo) gl.deleteBuffer(this.vbo);
+    if (this.ibo) gl.deleteBuffer(this.ibo);
+    this.vao = this.vbo = this.ibo = null;
+    this.count = 0;
+  }
 }
 
 /** Fullscreen triangle drawn with gl_VertexID — no buffers needed. */

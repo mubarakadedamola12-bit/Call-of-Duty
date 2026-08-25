@@ -262,7 +262,7 @@ export class Bot {
     this.goal = null;
     this.difficulty = difficulty;
     this.anim = { speed: 0, phase: Math.random() * 6.28, bob: 0, deathPitch: 0, deathRoll: 0, deathDrop: 0 };
-    this.name = BOT_NAMES[(Math.random() * BOT_NAMES.length) | 0];
+    this.name = nextBotName();
     this.lastSeen = null;
     this.muzzleFlashT = 0;
     this.stepTimer = 0;
@@ -291,6 +291,23 @@ export class Bot {
     out[2] = this.pos[2];
     return out;
   }
+}
+
+/**
+ * Callsigns are drawn without replacement from a shuffled pool — picking at
+ * random put two HOLLOWs on the same squad, which reads as a bug in a roster.
+ */
+let namePool = [];
+export function resetBotNames() { namePool = []; }
+function nextBotName() {
+  if (!namePool.length) {
+    namePool = BOT_NAMES.slice();
+    for (let i = namePool.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      [namePool[i], namePool[j]] = [namePool[j], namePool[i]];
+    }
+  }
+  return namePool.pop();
 }
 
 const BOT_NAMES = [

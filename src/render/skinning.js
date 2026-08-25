@@ -18,6 +18,7 @@ export class SkinnedMesh {
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     const vbo = gl.createBuffer();
+    this.vbo = vbo;
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     const s = SKIN_STRIDE * 4;
@@ -28,6 +29,7 @@ export class SkinnedMesh {
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, s, off);
     }
     const ibo = gl.createBuffer();
+    this.ibo = ibo;
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
     this.count = indices.length;
@@ -39,6 +41,14 @@ export class SkinnedMesh {
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.drawElements(gl.TRIANGLES, this.count, this.type, 0);
+  }
+  dispose() {
+    const gl = this.gl;
+    if (this.vao) gl.deleteVertexArray(this.vao);
+    if (this.vbo) gl.deleteBuffer(this.vbo);
+    if (this.ibo) gl.deleteBuffer(this.ibo);
+    this.vao = this.vbo = this.ibo = null;
+    this.count = 0;
   }
 }
 

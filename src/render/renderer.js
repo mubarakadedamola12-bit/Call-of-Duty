@@ -289,10 +289,14 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     // Bloom pyramid.
+    // Always build at least one level. A minimised window or a hidden tab can
+    // hand us a 2x2 canvas, and the old guard produced an EMPTY chain which
+    // then crashed the bloom pass.
     this.bloom = [];
     let bw = Math.max(1, w >> 1), bh = Math.max(1, h >> 1);
-    for (let i = 0; i < this.q.bloomMips && bw > 4 && bh > 4; i++) {
+    for (let i = 0; i < this.q.bloomMips; i++) {
       this.bloom.push(new RT(gl, bw, bh, [F16], false));
+      if (bw <= 4 || bh <= 4) break;
       bw = Math.max(1, bw >> 1); bh = Math.max(1, bh >> 1);
     }
     this.bloomUpRT = this.bloom.map((rt) => new RT(gl, rt.width, rt.height, [F16], false));

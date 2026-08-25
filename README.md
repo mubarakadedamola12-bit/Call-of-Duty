@@ -25,6 +25,18 @@ touch layout from a desktop browser.
 
 ---
 
+## Lobby
+
+The pre-match screen is a lobby rather than a menu: battleground picker,
+loadout with stat bars derived from the weapon definitions themselves, squad
+roster, and the engagement rules — over a camera that orbits the *actual* map
+you have selected, cutting between four vantage points.
+
+Picking a battleground rebuilds the match immediately, so the fly-around is
+always over the map you are about to play. That rebuild disposes the previous
+match's GL buffers; without it, clicking between maps would strand a map's
+worth of geometry on the GPU each time.
+
 ## Battlegrounds
 
 Three maps, selectable in Settings → Gameplay (applies on the next match):

@@ -195,3 +195,116 @@ button.wide{width:100%;padding:11px 0;font-size:13px;margin-top:4px}
   .setrow>span{flex-basis:46%}
   .tab{padding:7px 13px;font-size:11px;letter-spacing:.14em}
 }
+
+
+/* ================================================================== lobby */
+
+.lobby{justify-content:flex-start;gap:0;padding:0;
+  background:linear-gradient(180deg,rgba(4,7,11,.90) 0%,rgba(4,7,11,.55) 26%,
+    rgba(4,7,11,.55) 62%,rgba(4,7,11,.93) 100%);
+  backdrop-filter:none}
+
+.lobbybar{width:100%;display:flex;align-items:center;justify-content:space-between;
+  padding:18px clamp(16px,4vw,54px) 10px;gap:16px}
+.brandline .tag{display:block;font-size:10px;letter-spacing:.62em;color:#ffc233;
+  font-weight:600;text-indent:.62em;margin-bottom:5px}
+.brandline h1{font-size:clamp(22px,3.4vw,40px);font-weight:700;letter-spacing:.10em;
+  text-transform:uppercase;text-indent:.10em;line-height:1;
+  background:linear-gradient(180deg,#fff 30%,#8c9bab 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 3px 16px rgba(0,0,0,.75))}
+.brandline h1 em{font-style:normal;color:#ffc233;-webkit-text-fill-color:#ffc233;
+  margin-left:.34em;text-shadow:0 0 22px rgba(255,194,51,.4)}
+button.ghost{padding:9px 22px;font-size:11px;letter-spacing:.2em;text-indent:.2em}
+
+.lobbygrid{flex:1;width:100%;display:grid;gap:14px;align-content:start;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  padding:4px clamp(16px,4vw,54px);overflow-y:auto;min-height:0}
+.panelcard{background:rgba(8,12,18,.62);border:1px solid rgba(255,255,255,.09);
+  padding:14px 16px;backdrop-filter:blur(6px);min-width:0;
+  clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}
+.panelcard h3{font-size:11px;letter-spacing:.34em;color:#ffc233;font-weight:600;
+  text-indent:.34em;margin-bottom:11px;text-transform:uppercase}
+.panelcard h3.mt{margin-top:16px}
+
+/* map + weapon selection cards */
+.maplist,.loadout{display:grid;gap:7px}
+.pick{display:flex;flex-direction:column;gap:2px;padding:9px 11px;cursor:pointer;
+  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);transition:.14s;
+  border-left:2px solid rgba(255,255,255,.10)}
+.pick:hover{background:rgba(255,194,51,.09);border-color:rgba(255,194,51,.3)}
+.pick.on{background:rgba(255,194,51,.15);border-color:rgba(255,194,51,.55);
+  border-left-color:#ffc233}
+.pick .row1{display:flex;align-items:baseline;gap:8px}
+.pick b{font-size:13px;font-weight:600;letter-spacing:.10em;color:#dbe6f1}
+.pick.on b{color:#ffd88a}
+.pick i{font-style:normal;margin-left:auto;font-size:10px;letter-spacing:.14em;color:#7f8d9c}
+.pick.on i{color:#ffc233}
+.pick small{font-size:10.5px;color:#8798a8;letter-spacing:.02em}
+
+/* weapon stat bars */
+.stats{margin-top:11px;display:grid;gap:5px}
+.stat{display:flex;align-items:center;gap:9px;font-size:10px;letter-spacing:.14em;color:#8798a8}
+.stat span{flex:0 0 74px;text-transform:uppercase}
+.stat .bar{flex:1;height:4px;background:rgba(255,255,255,.09);overflow:hidden}
+.stat .bar i{display:block;height:100%;background:linear-gradient(90deg,#ffc233,#ff7a18);
+  transition:width .22s ease}
+.sidearm{margin-top:12px;font-size:10.5px;letter-spacing:.14em;color:#7f8d9c}
+.sidearm b{color:#cfdae6;font-weight:600}
+
+/* squad roster */
+.roster{display:grid;gap:9px}
+.team{display:grid;gap:3px}
+.teamhead{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.2em;
+  color:#7f8d9c;margin-bottom:2px}
+.teamhead i{width:7px;height:7px;font-style:normal}
+.teamhead.allies i{background:#4da3ff}
+.teamhead.enemies i{background:#ff3b30}
+.op{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#a8b8c8;
+  letter-spacing:.06em;padding:2px 0}
+.op.you{color:#ffd88a;font-weight:600}
+.op em{font-style:normal;margin-left:auto;font-size:9.5px;color:#5d6b79;letter-spacing:.12em}
+
+.rules{font-size:11px;color:#8798a8;line-height:1.95;letter-spacing:.03em}
+.rules b{color:#cfdae6;font-weight:600}
+
+.lobbyfoot{width:100%;display:flex;flex-direction:column;align-items:center;gap:9px;
+  padding:12px clamp(16px,4vw,54px) 22px}
+.controlsfold{width:min(560px,92vw);font-size:12px}
+.controlsfold summary{cursor:pointer;list-style:none;text-align:center;font-size:10px;
+  letter-spacing:.3em;color:#6d7a89;padding:5px;text-indent:.3em}
+.controlsfold summary::-webkit-details-marker{display:none}
+.controlsfold summary:hover{color:#9fb0c1}
+.controlsfold .keys{margin-top:9px;background:rgba(8,12,18,.6);padding:12px 15px;
+  border:1px solid rgba(255,255,255,.07)}
+
+/* Two columns before one: a landscape phone is wide enough for three compact
+   panels, and stacking them buries the loadout below the fold. */
+@media (max-width:1040px){ .lobbygrid{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:700px){ .lobbygrid{grid-template-columns:1fr} }
+
+@media (max-height:600px), (pointer:coarse){
+  .lobbybar{padding:7px 12px 3px}
+  .brandline .tag{font-size:8px;letter-spacing:.5em;margin-bottom:2px}
+  .brandline h1{font-size:19px}
+  button.ghost{padding:7px 15px;font-size:10px}
+  .lobbygrid{gap:7px;padding:2px 12px;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .panelcard{padding:9px 10px}
+  .panelcard h3{font-size:9.5px;margin-bottom:6px;letter-spacing:.24em}
+  .panelcard h3.mt{margin-top:10px}
+  .pick{padding:5px 8px}
+  .pick b{font-size:11.5px}
+  .pick small,.pick i{font-size:9px}
+  .stat{font-size:8.5px}
+  .stat span{flex-basis:56px}
+  .op{font-size:10px;padding:1px 0}
+  .op em{font-size:8.5px}
+  .rules,.sidearm{font-size:9.5px;line-height:1.7}
+  .lobbyfoot{padding:6px 12px 9px;gap:4px}
+  button.primary{padding:11px 44px;font-size:15px}
+  .controlsfold,.foot{display:none}
+}
+/* Portrait phone: the rotate gate covers it, but keep it sane regardless. */
+@media (pointer:coarse) and (max-width:560px){
+  .lobbygrid{grid-template-columns:1fr}
+}

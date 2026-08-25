@@ -33,22 +33,45 @@
     <div class="loadmsg" id="loadmsg">INITIALISING RENDERER…</div>
   </section>
 
-  <!-- ------------------------------------------------------------- MENU -->
-  <section id="menu" class="screen hidden">
-    <div class="brand small">
-      <div class="tag">TACTICAL FPS</div>
-      <h1>OPERATION<span>BLACKOUT</span></h1>
+  <!-- ------------------------------------------------------------ LOBBY -->
+  <section id="menu" class="screen lobby hidden">
+    <header class="lobbybar">
+      <div class="brandline">
+        <span class="tag">TACTICAL FPS</span>
+        <h1>OPERATION<em>BLACKOUT</em></h1>
+      </div>
+      <div class="lobbyactions">
+        <button id="opensettings" class="ghost">SETTINGS</button>
+      </div>
+    </header>
+
+    <div class="lobbygrid">
+      <section class="panelcard">
+        <h3>Battleground</h3>
+        <div id="maplist" class="maplist"></div>
+        <div id="maprules" class="rules"></div>
+      </section>
+
+      <section class="panelcard">
+        <h3>Loadout</h3>
+        <div id="loadout" class="loadout"></div>
+        <div id="weaponstats" class="stats"></div>
+        <div class="sidearm">SIDEARM <b>P-45</b> · LETHAL <b>FRAG ×2</b></div>
+      </section>
+
+      <section class="panelcard">
+        <h3>Squad</h3>
+        <div id="roster" class="roster"></div>
+        <h3 class="mt">Engagement</h3>
+        <div id="engagement" class="rules"></div>
+      </section>
     </div>
 
-    <div class="panel">
+    <footer class="lobbyfoot">
       <button id="deploy" class="primary">DEPLOY</button>
-      <div class="hint desktoponly">Click to lock the mouse · <kbd>Esc</kbd> releases it</div>
-      <div class="hint touchonly">Tap to drop in · rotate to landscape for the best view</div>
-    </div>
-
-    <div class="cols">
-      <div class="card">
-        <h3>CONTROLS</h3>
+      <div class="hint" id="deployhint">Click to lock the mouse · <kbd>Esc</kbd> releases it</div>
+      <details class="controlsfold">
+        <summary>CONTROLS</summary>
         <ul class="keys">
           <li><kbd>W A S D</kbd><span>Move</span></li>
           <li><kbd>↑ ← ↓ →</kbd><span>Move (same as WASD)</span></li>
@@ -56,35 +79,14 @@
           <li><kbd>Ctrl</kbd>/<kbd>C</kbd><span>Crouch — tap to toggle, hold to stay down</span></li>
           <li><kbd>Shift</kbd>+<kbd>C</kbd><span>Slide · jump out of it to keep the speed</span></li>
           <li><kbd>Space</kbd><span>Jump · into a ledge to mantle up</span></li>
-          <li><kbd>LMB</kbd><span>Fire</span></li>
-          <li><kbd>RMB</kbd><span>Aim down sights</span></li>
-          <li><kbd>R</kbd><span>Reload</span></li>
+          <li><kbd>LMB</kbd> / <kbd>RMB</kbd><span>Fire / aim down sights</span></li>
+          <li><kbd>R</kbd> · <kbd>G</kbd> · <kbd>F</kbd><span>Reload · frag · inspect</span></li>
           <li><kbd>1</kbd><kbd>2</kbd>/<kbd>Q</kbd><span>Swap weapon</span></li>
-          <li><kbd>G</kbd><span>Frag grenade</span></li>
-          <li><kbd>F</kbd><span>Inspect weapon</span></li>
           <li><kbd>4</kbd><kbd>5</kbd><span>Killstreaks (UAV · Airstrike)</span></li>
           <li><kbd>Esc</kbd><span>Pause</span></li>
         </ul>
-        <div class="touchonly">
-          <h3 class="mt">TOUCH</h3>
-          <ul class="keys">
-            <li><kbd>Left</kbd><span>Drag anywhere to move · push forward to sprint</span></li>
-            <li><kbd>Right</kbd><span>Drag to look</span></li>
-            <li><kbd>FIRE</kbd><span>Hold and slide to keep aiming while shooting</span></li>
-            <li><kbd>ADS</kbd><span>Aim down sights</span></li>
-            <li><kbd>CROUCH</kbd><span>Tap while sprinting to slide</span></li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>LOADOUT</h3>
-        <div class="loadout" id="loadout"></div>
-        <h3 class="mt">MATCH</h3>
-        <div class="summary" id="matchsummary"></div>
-        <button id="opensettings" class="wide">SETTINGS</button>
-      </div>
-    </div>
+      </details>
+    </footer>
     <div class="foot" id="gpuinfo"></div>
   </section>
 

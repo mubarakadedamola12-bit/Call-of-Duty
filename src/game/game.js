@@ -7,7 +7,7 @@ import { buildAllWeapons, recoilStep, GRENADE } from './weapons.js';
 import { Viewmodel, buildHands } from './viewmodel.js';
 import {
   drawSoldier, moveEntity, rayHitActor, groundAt, collideXZ,
-  Bot, NavAgent, STATE,
+  Bot, NavAgent, STATE, resetBotNames,
 } from './actors.js';
 import { buildSoldier, makeSkeleton, makePose } from './soldier.js';
 import { defaultMaterial } from '../render/renderer.js';
@@ -165,6 +165,7 @@ export class Game {
     const total = clamp(renderer.q ? renderer.q.bots : 9, 4, 12);
     const allies = Math.floor(total / 2);
     const sk = this.diff.botSkill;
+    resetBotNames();
     this.bots = [];
     for (let i = 0; i < allies; i++) this.bots.push(new Bot(this.world, 0, clamp((0.72 + i * 0.05) * sk, 0.1, 1)));
     for (let i = 0; i < total - allies; i++) this.bots.push(new Bot(this.world, 1, clamp((0.80 + i * 0.05) * sk, 0.1, 1)));
@@ -175,6 +176,10 @@ export class Game {
     }
 
     this.time = 0;
+    // Lobby camera: a slow orbit of the battleground with periodic cuts, so
+    // the menu sits over the map you are about to play rather than a static
+    // backdrop.
+    this.cine = { active: false, t: 0, shot: 0, cutAt: 0 };
     this.camWorld = m4();
     this.view = m4();
     this._eye = v3();
@@ -190,6 +195,23 @@ export class Game {
   }
 
   _mat(o) { const m = defaultMaterial(); Object.assign(m, o); return m; }
+
+  /**
+   * Releases every GL object this match owns. The lobby rebuilds a Game each
+   * time you pick a different battleground, and without this each switch would
+   * strand a whole map's worth of buffers on the GPU.
+   */
+  dispose() {
+    for (const m of this.worldMeshes) m.mesh.dispose();
+    this.worldMeshes.length = 0;
+    for (const rig of this.soldiers) rig.mesh.dispose();
+    for (const id of Object.keys(this.weapons)) {
+      for (const part of this.weapons[id].model.parts) part.mesh.dispose();
+    }
+    for (const part of this.vm.hands.glove ? [this.vm.hands.glove, this.vm.hands.forearm] : []) {
+      part.mesh.dispose();
+    }
+  }
 
   get weapon() { return this.weapons[this.loadout[this.slot]]; }
   get weaponId() { return this.loadout[this.slot]; }
@@ -1365,6 +1387,46 @@ export class Game {
     }
   }
 
+  /**
+   * Builds a lookAt camera orbiting the arena. Returns the same shape as
+   * buildCamera() so the rest of submit() does not care which is in use.
+   */
+  cinematicCamera(dt) {
+    const c = this.cine;
+    c.t += dt;
+    if (c.t >= c.cutAt) {
+      c.shot = (c.shot + 1) % CINE_SHOTS.length;
+      c.cutAt = c.t + 9.5;
+    }
+    const shot = CINE_SHOTS[c.shot];
+    // Drift slowly through the shot so it never looks like a still.
+    const k = clamp((c.t - (c.cutAt - 9.5)) / 9.5, 0, 1);
+    const ang = shot.angle + k * shot.sweep;
+    const rad = lerp(shot.radius, shot.radius + shot.dolly, k);
+    const h = lerp(shot.height, shot.height + shot.rise, k);
+
+    const eye = this._eye;
+    eye[0] = Math.cos(ang) * rad;
+    eye[1] = h;
+    eye[2] = Math.sin(ang) * rad;
+    const target = [shot.lookX, shot.lookY, shot.lookZ];
+
+    const f = this._dir;
+    V3.sub(f, target, eye);
+    V3.norm(f, f);
+    const up = v3(0, 1, 0);
+    M4.lookAt(this.view, eye, target, up);
+
+    // camWorld is the inverse of a rigid view matrix: transpose the basis.
+    const v = this.view, cw = this.camWorld;
+    cw[0] = v[0]; cw[1] = v[4]; cw[2] = v[8]; cw[3] = 0;
+    cw[4] = v[1]; cw[5] = v[5]; cw[6] = v[9]; cw[7] = 0;
+    cw[8] = v[2]; cw[9] = v[6]; cw[10] = v[10]; cw[11] = 0;
+    cw[12] = eye[0]; cw[13] = eye[1]; cw[14] = eye[2]; cw[15] = 1;
+
+    return { eye, dir: f, right: [v[0], v[4], v[8]] };
+  }
+
   /* --------------------------------------------------------------- frame */
 
   update(dt) {
@@ -1389,8 +1451,8 @@ export class Game {
 
   submit(dt) {
     const r = this.renderer;
-    const cam = this.buildCamera();
-    r.setCamera(cam.eye, this.view, this.fov);
+    const cam = this.cine.active ? this.cinematicCamera(dt) : this.buildCamera();
+    r.setCamera(cam.eye, this.view, this.cine.active ? 58 : this.fov);
 
     for (const m of this.worldMeshes) r.draw(m.mesh, IDENTITY, m.mat, true);
 
@@ -1433,7 +1495,7 @@ export class Game {
     // Viewmodel. Hidden while dead, and hidden behind a telescopic sight —
     // there the 2D scope overlay is the whole picture.
     const scoped = this.weapon.scope && this.adsAmt > 0.80;
-    if (!this.player.dead && !scoped) {
+    if (!this.player.dead && !scoped && !this.cine.active) {
       this.vm.render(r, this.camWorld, this.weapon, this._muzzleOut);
       // Muzzle flash light comes from the actual muzzle.
       if (this.sinceFire < 0.05) {
@@ -1510,6 +1572,14 @@ export class Game {
     };
   }
 }
+
+/** Lobby camera shots: angle/radius/height plus how each drifts over its 9.5s. */
+const CINE_SHOTS = [
+  { angle: 0.60, sweep: 0.22, radius: 30, dolly: -4, height: 11, rise: -2.5, lookX: 0, lookY: 3.5, lookZ: 0 },
+  { angle: 2.30, sweep: -0.18, radius: 24, dolly: 3, height: 6, rise: 1.5, lookX: 0, lookY: 4.5, lookZ: 0 },
+  { angle: 3.90, sweep: 0.26, radius: 34, dolly: -6, height: 15, rise: -4, lookX: 0, lookY: 2.5, lookZ: 0 },
+  { angle: 5.30, sweep: -0.20, radius: 21, dolly: 4, height: 4.5, rise: 2, lookX: 0, lookY: 3.0, lookZ: 0 },
+];
 
 const IDENTITY = m4();
 const TMP = m4();

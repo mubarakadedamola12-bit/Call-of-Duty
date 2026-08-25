@@ -121,6 +121,10 @@ async function boot() {
     document.body.classList.add('touch');
   }
   if (IS_MOBILE) document.body.classList.add('mobile');
+  if (IS_TOUCH) {
+    const dh = $('deployhint');
+    if (dh) dh.textContent = 'Left thumb moves · right thumb aims · drag from FIRE to shoot while aiming';
+  }
   initUI();
 
   const setProgress = (p, msg) => {
@@ -151,9 +155,10 @@ async function boot() {
   hud.buildMinimap(game.world);
 
   applySettings();
-  buildLoadoutUI();
+  buildLobby();
   setProgress(1, 'READY');
   await new Promise((r) => setTimeout(r, 260));
+  game.cine.active = true;
   $('loading').classList.add('hidden');
   $('menu').classList.remove('hidden');
   running = true;
@@ -399,17 +404,7 @@ function refreshRow(it) {
 function refreshSettingsUI() {
   if (!SCHEMA) return;
   for (const [, items] of SCHEMA) for (const it of items) refreshRow(it);
-  const el = $('matchsummary');
-  if (el) {
-    const d = DIFFICULTY[settings.difficulty] || DIFFICULTY.regular;
-    const mp = MAPS[settings.map] || MAPS.scrapyard;
-    el.innerHTML = `<b>${mp.name}</b> — ${mp.blurb}<br>`
-      + `Difficulty <b>${d.name}</b><br>`
-      + `Health <b>${Math.round(100 * d.healthScale)}</b> · `
-      + `Damage taken <b>${Math.round(d.damageTaken * 100)}%</b><br>`
-      + `Quality <b>${settings.quality.toUpperCase()}</b> · `
-      + `FPS cap <b>${settings.fpsCap || 'none'}</b>`;
-  }
+  renderLobbyRules();
 }
 
 function openSettings(fromPause) {
@@ -450,10 +445,15 @@ function initUI() {
     paused = false;
     started = false;
     if (touch) { touch.enabled = false; touch.releaseAll(); }
+    if (game) { game.cine.active = true; game.cine.cutAt = 0; }
+    renderRoster();
+    renderLobbyRules();
     $('pause').classList.add('hidden');
     $('menu').classList.remove('hidden');
+    needsRedraw = true;
   });
   $('restart').addEventListener('click', () => {
+    if (game) game.dispose();
     game = new Game(gl, renderer, audio, input, hud, settings.difficulty, settings.map, humans);
     game.touch = touch;
     hud.buildMinimap(game.world);
@@ -490,14 +490,49 @@ function initUI() {
 }
 
 
-function buildLoadoutUI() {
+/* -------------------------------------------------------------- the lobby */
+
+/** Normalised 0..1 bars derived from the weapon definitions themselves. */
+function weaponBars(w) {
+  const inv = (v, lo, hi) => clamp(1 - (v - lo) / (hi - lo), 0, 1);
+  const norm = (v, lo, hi) => clamp((v - lo) / (hi - lo), 0, 1);
+  const recoil = w.recoil.v + w.recoil.h * 0.5;
+  return [
+    ['Damage', norm(w.damage * (w.bullets > 1 ? w.bullets * 0.55 : 1), 18, 135)],
+    ['Range', norm(w.falloffStart, 6, 60)],
+    ['Fire rate', norm(w.rpm, 45, 980)],
+    ['Handling', inv(w.adsTime, 0.16, 0.40) * 0.6 + norm(w.moveMul, 0.86, 1.15) * 0.4],
+    ['Control', inv(recoil, 0.5, 3.5)],
+  ];
+}
+
+function buildLobby() {
+  // --- battlegrounds
+  const ml = $('maplist');
+  ml.innerHTML = '';
+  for (const id of Object.keys(MAPS)) {
+    const m = MAPS[id];
+    const el = document.createElement('div');
+    el.className = 'pick' + (settings.map === id ? ' on' : '');
+    el.innerHTML = `<div class="row1"><b>${m.name}</b><i>${id === settings.map ? 'SELECTED' : ''}</i></div>`
+      + `<small>${m.blurb}</small>`;
+    el.addEventListener('click', () => {
+      if (settings.map === id) return;
+      settings.map = id;
+      saveSettings();
+      selectMap(id);
+    });
+    ml.appendChild(el);
+  }
+
+  // --- primary weapon
   const el = $('loadout');
   el.innerHTML = '';
   for (const w of WEAPONS) {
     if (w.id === 'pistol') continue;
     const d = document.createElement('div');
-    d.className = 'wpn' + (settings.primary === w.id ? ' on' : '');
-    d.innerHTML = `<b>${w.name}</b><i>${w.class}</i>`;
+    d.className = 'pick' + (settings.primary === w.id ? ' on' : '');
+    d.innerHTML = `<div class="row1"><b>${w.name}</b><i>${w.class}</i></div>`;
     d.addEventListener('click', () => {
       settings.primary = w.id;
       saveSettings();
@@ -509,11 +544,70 @@ function buildLoadoutUI() {
       }
       [...el.children].forEach((c) => c.classList.remove('on'));
       d.classList.add('on');
+      renderWeaponStats();
       audio.uiClick();
     });
     el.appendChild(d);
   }
+  renderWeaponStats();
+  renderRoster();
+  renderLobbyRules();
 }
+
+function renderWeaponStats() {
+  const host = $('weaponstats');
+  if (!host) return;
+  const w = WEAPONS.find((x) => x.id === settings.primary) || WEAPONS[0];
+  host.innerHTML = weaponBars(w).map(([label, v]) =>
+    `<div class="stat"><span>${label}</span><div class="bar"><i style="width:${(v * 100).toFixed(0)}%"></i></div></div>`).join('');
+}
+
+function renderRoster() {
+  const host = $('roster');
+  if (!host || !game) return;
+  const team = (n) => game.bots.filter((b) => b.team === n).map((b) => b.name);
+  const row = (name, tag, you) =>
+    `<div class="op${you ? ' you' : ''}">${name}<em>${tag}</em></div>`;
+  host.innerHTML =
+    `<div class="team"><div class="teamhead allies"><i></i>ALLIES</div>`
+    + row('YOU', 'OPERATOR', true)
+    + team(0).map((n) => row(n, 'AI')).join('')
+    + `</div><div class="team"><div class="teamhead enemies"><i></i>HOSTILES</div>`
+    + team(1).map((n) => row(n, 'AI')).join('')
+    + `</div>`;
+}
+
+function renderLobbyRules() {
+  const m = MAPS[settings.map] || MAPS.scrapyard;
+  const d = DIFFICULTY[settings.difficulty] || DIFFICULTY.regular;
+  const mr = $('maprules');
+  if (mr) {
+    mr.innerHTML = `Mode <b>TEAM DEATHMATCH</b><br>`
+      + `Score limit <b>${game ? game.scoreLimit : 75}</b> · `
+      + `Time <b>${Math.round((game ? game.timeLimit : 600) / 60)} min</b>`;
+  }
+  const en = $('engagement');
+  if (en) {
+    en.innerHTML = `Difficulty <b>${d.name}</b><br>`
+      + `Health <b>${Math.round(100 * d.healthScale)}</b> · Damage taken <b>${Math.round(d.damageTaken * 100)}%</b><br>`
+      + `Quality <b>${settings.quality.toUpperCase()}</b>${settings.fpsCap ? ` · <b>${settings.fpsCap} FPS</b>` : ''}`;
+  }
+}
+
+/** Rebuilds the match on the chosen map so the lobby flies over the real thing. */
+function selectMap(id) {
+  audio.uiClick();
+  if (game) game.dispose();
+  game = new Game(gl, renderer, audio, input, hud, settings.difficulty, id, humans);
+  game.touch = touch;
+  game.cine.active = true;
+  applySettings();
+  hud.buildMinimap(game.world);
+  hud.killfeed.length = 0;
+  buildLobby();
+  needsRedraw = true;
+}
+
 
 function togglePause(on) {
   if (!started) return;
@@ -549,6 +643,7 @@ function deploy() {
   $('menu').classList.add('hidden');
   $('pause').classList.add('hidden');
   $('settings').classList.add('hidden');
+  if (game) game.cine.active = false;
   paused = false;
   started = true;
   if (touch) { touch.enabled = true; touch.releaseAll(); }
@@ -574,7 +669,9 @@ let menuAcc = 0;
 // Redraw rate when nobody is actually playing. Rendering a full deferred frame
 // 60 times a second while the player reads the briefing — or has walked away
 // from a paused game — is pure heat for no benefit.
-export const IDLE_FPS = { menu: 20, paused: 6, blurred: 3 };
+// The lobby flies a camera over the map, so it needs a smooth-ish rate; a
+// paused match is a still frame and needs almost nothing.
+export const IDLE_FPS = { menu: 30, paused: 6, blurred: 3 };
 
 /**
  * Redraw rate for a given state. Pure so it can be reasoned about and tested
@@ -690,7 +787,12 @@ window.OB = {
   get input() { return input; },
   get hud() { return hud; },
   get settings() { return settings; },
-  forceStart() { audio.init(); started = true; paused = false; input.locked = true;
+  // Mirrors deploy() minus pointer lock, for automated checks.
+  forceStart() {
+    audio.init(); started = true; paused = false; input.locked = true;
+    if (game) game.cine.active = false;
     document.getElementById('menu').classList.add('hidden');
-    document.getElementById('pause').classList.add('hidden'); },
+    document.getElementById('pause').classList.add('hidden');
+    document.getElementById('settings').classList.add('hidden');
+  },
 };
