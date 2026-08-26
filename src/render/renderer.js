@@ -20,12 +20,14 @@ const ARRAY_UNIT_SURF = 13;
 /** Per-tier render settings. Mobile GPUs need the shadow maps and the SSAO
  *  budget cut hard before anything else. */
 export const QUALITY = {
-  low: { shadow: 1024, shadowFar: 1024, ssao: false, ssaoSamples: 8, bloomMips: 4, bots: 5 },
-  medium: { shadow: 1536, shadowFar: 1536, ssao: true, ssaoSamples: 10, bloomMips: 5, bots: 7 },
-  high: { shadow: 2048, shadowFar: 2048, ssao: true, ssaoSamples: 16, bloomMips: 6, bots: 9 },
+  low: { shadow: 1024, shadowFar: 1024, ssao: false, ssaoSamples: 8, bloomMips: 4, bots: 5, ssr: false, ssrSteps: 0 },
+  medium: { shadow: 1536, shadowFar: 1536, ssao: true, ssaoSamples: 10, bloomMips: 5, bots: 7, ssr: true, ssrSteps: 16 },
+  high: { shadow: 2048, shadowFar: 2048, ssao: true, ssaoSamples: 16, bloomMips: 6, bots: 9, ssr: true, ssrSteps: 28 },
 };
 
 export const defaultMaterial = () => ({
+  wet: 1,        // how much standing water this surface accepts
+  porosity: 1,   // how much it darkens when wet
   layer: MAT.CONCRETE,
   uvScale: [1, 1],
   tint: [1, 1, 1],
@@ -88,6 +90,12 @@ export class Renderer {
     this.adsBlur = 0; this.speedBlur = 0;
     this.ssaoIntensity = 0.95;
     this.ssaoRadius = 0.62;
+    this.ssrIntensity = 0.9;
+    // Rough reflections still read as sheen, so trace well past mirror-smooth.
+    this.ssrMaxRough = 0.78;
+    this.baseWetness = 0.0;    // authored by the map
+    this.wetnessScale = 1.0;   // player preference
+    this.wetness = 0.0;        // product of the two
 
     // ---- per-frame lists
     this.draws = [];
@@ -147,6 +155,8 @@ export class Renderer {
       ssao: P(S.fsTriVS, S.ssaoFS, 'ssao'),
       blur: P(S.fsTriVS, S.blurFS, 'blur'),
       lighting: P(S.fsTriVS, S.lightingFS, 'lighting'),
+      ssr: P(S.fsTriVS, S.ssrFS, 'ssr'),
+      add: P(S.fsTriVS, S.addFS, 'add'),
       bloomPre: P(S.fsTriVS, S.bloomPrefilterFS, 'bloomPre'),
       bloomDown: P(S.fsTriVS, S.bloomDownFS, 'bloomDown'),
       bloomUp: P(S.fsTriVS, S.bloomUpFS, 'bloomUp'),
@@ -228,6 +238,10 @@ export class Renderer {
     if (a.fogDensity !== undefined) this.fogDensity = a.fogDensity;
     if (a.fogHeight !== undefined) this.fogHeight = a.fogHeight;
     if (a.cloudAmount !== undefined) this.cloudAmount = a.cloudAmount;
+    if (a.wetness !== undefined) {
+      this.baseWetness = a.wetness;
+      this.wetness = a.wetness * this.wetnessScale;
+    }
     if (a.exposure !== undefined) this.exposure = a.exposure;
     if (a.saturation !== undefined) this.saturation = a.saturation;
     if (a.contrast !== undefined) this.contrast = a.contrast;
@@ -277,6 +291,9 @@ export class Renderer {
 
     this.aoRT = new RT(gl, half[0], half[1], [R8], false);
     this.aoTmp = new RT(gl, half[0], half[1], [R8], false);
+    // Reflections are traced at half resolution and added back at full — the
+    // result is a touch soft, which is closer to a real rough surface anyway.
+    this.ssrRT = new RT(gl, half[0], half[1], [F16], false);
 
     // Scene HDR shares the G-buffer depth so forward FX can depth-test.
     this.sceneRT = new RT(gl, w, h, [F16], false, this.gbuf.depth);
@@ -593,6 +610,8 @@ export class Renderer {
         pg.f('uNormalScale', m.normalScale);
         pg.f('uMacro', m.macro);
         pg.f('uAOMul', m.ao);
+        pg.f('uWetness', m.wet === undefined ? this.wetness : this.wetness * m.wet);
+        pg.f('uPorosity', m.porosity === undefined ? 1 : m.porosity);
         lastMat = m;
       }
       it.mesh.draw();
@@ -619,6 +638,8 @@ export class Renderer {
           sp.f('uNormalScale', m.normalScale);
           sp.f('uMacro', m.macro);
           sp.f('uAOMul', m.ao);
+          sp.f('uWetness', 0);      // characters are not puddles
+          sp.f('uPorosity', 1);
           skinMat = m;
         }
         gl.uniformMatrix4fv(sp.u.uBones, false, it.palette);
@@ -696,6 +717,52 @@ export class Renderer {
     bp.tex('uTex', this.aoTmp.tex); bp.tex('uDepth', this.depthCopy);
     bp.f2('uTexel', tw, th); bp.f2('uDir', 0, 1);
     this.tri.draw();
+  }
+
+  _ssrPass() {
+    if (!this.q.ssr || this.ssrIntensity <= 0.001) return;
+    const gl = this.gl;
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.disable(gl.BLEND);
+
+    this.ssrRT.bind();
+    const pg = this.pg.ssr.use();
+    pg.tex('uScene', this.sceneRT.tex);
+    pg.tex('uDepth', this.depthCopy);
+    pg.tex('uNormal', this.gbuf.colors[1]);
+    pg.tex('uAlbedo', this.gbuf.colors[0]);
+    pg.tex('uMisc', this.gbuf.colors[2]);
+    pg.m4('uProj', this.proj);
+    pg.m4('uInvProj', this.invProj);
+    pg.m4('uView', this.view);
+    pg.m4('uInvVP', this.invVP);
+    pg.v3('uCamPos', this.camPos);
+    pg.f2('uRes', this.ssrRT.width, this.ssrRT.height);
+    pg.v3('uAmbientTint', this.ambientTint);
+    pg.f('uAmbientMul', this.ambientMul);
+    pg.f('uIntensity', this.ssrIntensity);
+    pg.f('uMaxRough', this.ssrMaxRough);
+    pg.i('uSteps', this.q.ssrSteps);
+    pg.f('uFrame', this.frame % 64);
+    pg.v3('uSunDir', this.sunDir);
+    pg.f3('uSunColor', this.sunColor[0] * this.sunIntensity, this.sunColor[1] * this.sunIntensity, this.sunColor[2] * this.sunIntensity);
+    pg.f('uTime', this.time);
+    pg.v3('uSkyZenith', this.skyZenith);
+    pg.v3('uSkyMid', this.skyMid);
+    pg.v3('uSkyHaze', this.skyHaze);
+    pg.v3('uGroundBounce', this.groundBounce);
+    this.tri.draw();
+
+    // Add the delta back into the scene. Separate targets, so no feedback.
+    this.sceneNoDepth.bind();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    const ap = this.pg.add.use();
+    ap.tex('uTex', this.ssrRT.tex);
+    ap.f('uScale', 1.0);
+    this.tri.draw();
+    gl.disable(gl.BLEND);
   }
 
   _lightingPass() {
@@ -876,6 +943,7 @@ export class Renderer {
 
     this._ssaoPass();
     this._lightingPass();
+    this._ssrPass();
     this._forwardFX();
     this._bloomPass();
     this._compositePass();

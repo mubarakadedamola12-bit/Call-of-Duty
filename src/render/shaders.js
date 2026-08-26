@@ -182,6 +182,8 @@ uniform float uMetalMul;
 uniform float uNormalScale;
 uniform float uMacro;      // 0..1 — strength of large-scale tint break-up
 uniform float uAOMul;
+uniform float uWetness;    // 0..1 — standing water on upward-facing surfaces
+uniform float uPorosity;   // how much this material darkens when wet
 
 layout(location=0) out vec4 oAlbedo;   // rgb albedo, a baked AO
 layout(location=1) out vec4 oNormal;   // xyz world normal, w roughness
@@ -209,8 +211,23 @@ void main(){
   tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 1e-4));
   vec3 Nw = normalize(T * tn.x + B * tn.y + N * tn.z);
 
+  float rough = clamp(srf.b * uRoughMul, 0.055, 1.0);
+
+  // Water pools in low, flat places. It darkens what it soaks into and leaves a
+  // near-mirror film on top — which is most of why wet ground reads as real.
+  if (uWetness > 0.001){
+    float pools = fbm2(vW.xz * 0.42 + 13.7);
+    float mask = smoothstep(0.44, 0.68, pools) * uWetness;
+    mask *= smoothstep(0.50, 0.88, Nw.y);          // only upward faces hold water
+    mask *= smoothstep(0.10, 0.45, alb.a);         // crevices stay dry-looking
+    base *= mix(1.0, 1.0 - 0.55 * uPorosity, mask);
+    rough = mix(rough, 0.045, mask);
+    // The film is flatter than whatever is underneath it.
+    Nw = normalize(mix(Nw, normalize(N), mask * 0.85));
+  }
+
   oAlbedo = vec4(base, clamp(alb.a * uAOMul, 0.0, 1.0));
-  oNormal = vec4(Nw, clamp(srf.b * uRoughMul, 0.055, 1.0));
+  oNormal = vec4(Nw, rough);
   oMisc   = vec4(uEmissive / EM_SCALE, clamp(srf.a * uMetalMul, 0.0, 1.0));
 }`;
 
@@ -599,6 +616,138 @@ void main(){
 
   oCol = vec4(col, 1.0);
 }`;
+
+
+/* ------------------------------------------------------ screen-space reflections */
+
+/**
+ * Ray-marches the depth buffer to find what each surface should be reflecting.
+ *
+ * Outputs a *delta* against the analytic sky reflection the deferred resolve
+ * already applied — so this can simply be added to the scene without
+ * double-counting the specular term.
+ */
+export const ssrFS = H + COMMON + SKY + PBR + `
+in vec2 vUV;
+
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform sampler2D uNormal;
+uniform sampler2D uAlbedo;
+uniform sampler2D uMisc;
+
+uniform mat4  uProj, uInvProj, uView, uInvVP;
+uniform vec3  uCamPos;
+uniform vec2  uRes;
+uniform vec3  uAmbientTint;
+uniform float uAmbientMul;
+uniform float uIntensity;
+uniform float uMaxRough;    // above this, reflections are too blurry to trace
+uniform int   uSteps;
+uniform float uFrame;
+
+out vec4 oCol;
+
+vec3 viewPos(vec2 uv, float d){
+  vec4 c = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  vec4 v = uInvProj * c;
+  return v.xyz / v.w;
+}
+
+void main(){
+  float depth = texture(uDepth, vUV).r;
+  if (depth >= 0.9999){ oCol = vec4(0.0); return; }
+
+  vec4 nr = texture(uNormal, vUV);
+  float rough = nr.w;
+  if (rough > uMaxRough){ oCol = vec4(0.0); return; }
+
+  vec4 ms = texture(uMisc, vUV);
+  float metal = ms.a;
+  vec3 albedo = texture(uAlbedo, vUV).rgb;
+  vec3 f0 = mix(vec3(0.04), albedo, metal);
+
+  vec3 P = viewPos(vUV, depth);
+  vec3 N = normalize(mat3(uView) * nr.xyz);
+  vec3 V = normalize(-P);
+  float NoV = sat(dot(N, V));
+  vec3 R = reflect(-V, N);
+
+  // Nothing useful to trace toward the camera.
+  if (R.z > 0.0 && P.z + R.z * 0.1 > -0.05){ oCol = vec4(0.0); return; }
+
+  // ---- march
+  float jitter = ign(gl_FragCoord.xy + uFrame * 7.13);
+  float stepLen = 0.35;
+  vec3 pos = P + N * 0.03;
+  float hitT = -1.0;
+  vec2 hitUV = vec2(0.0);
+  const int MAXSTEPS = 40;
+
+  for (int i = 0; i < MAXSTEPS; i++){
+    if (i >= uSteps) break;
+    // Geometric growth so near reflections are precise and far ones are cheap.
+    float adv = stepLen * (1.0 + float(i) * 0.28);
+    pos += R * adv * (i == 0 ? (0.4 + jitter * 0.6) : 1.0);
+    if (pos.z > -0.05) break;
+
+    vec4 clip = uProj * vec4(pos, 1.0);
+    vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+
+    float sd = texture(uDepth, uv).r;
+    if (sd >= 0.9999) continue;
+    vec3 sp = viewPos(uv, sd);
+    float diff = sp.z - pos.z;              // >0 means the ray is behind geometry
+
+    if (diff > 0.0 && diff < adv * 2.2 + 0.35){
+      // Binary refine so the hit lands on the surface, not a step past it.
+      vec3 lo = pos - R * adv, hi = pos;
+      for (int k = 0; k < 5; k++){
+        vec3 mid = (lo + hi) * 0.5;
+        vec4 mc = uProj * vec4(mid, 1.0);
+        vec2 muv = (mc.xy / mc.w) * 0.5 + 0.5;
+        vec3 msp = viewPos(muv, texture(uDepth, muv).r);
+        if (msp.z - mid.z > 0.0) hi = mid; else lo = mid;
+      }
+      vec4 fc = uProj * vec4(hi, 1.0);
+      hitUV = (fc.xy / fc.w) * 0.5 + 0.5;
+      hitT = 1.0;
+      break;
+    }
+  }
+
+  // Reproduce exactly what the deferred resolve already applied for this pixel,
+  // so what we hand back is only the difference.
+  vec4 wp4 = uInvVP * vec4(vUV * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+  vec3 W = wp4.xyz / wp4.w;
+  vec3 Rworld = reflect(-normalize(uCamPos - W), nr.xyz);
+  vec3 skyUp = skyBase(vec3(0.0, 1.0, 0.0));
+  vec3 envSpec = mix(skyBase(Rworld), skyUp * 0.85, rough * rough) * uAmbientTint * uAmbientMul;
+
+  if (hitT < 0.0){ oCol = vec4(0.0); return; }
+
+  vec3 hitColor = texture(uScene, hitUV).rgb;
+
+  // Confidence: fade at the screen edge, with roughness, and at grazing angles
+  // where screen-space information is least trustworthy.
+  vec2 e = abs(hitUV - 0.5) * 2.0;
+  float edge = 1.0 - smoothstep(0.72, 1.0, max(e.x, e.y));
+  float roughFade = 1.0 - smoothstep(uMaxRough * 0.45, uMaxRough, rough);
+  float conf = edge * roughFade * uIntensity;
+  if (conf <= 0.003){ oCol = vec4(0.0); return; }
+
+  vec3 brdf = envBRDFApprox(f0, rough, NoV);
+  oCol = vec4((hitColor - envSpec) * brdf * conf, 1.0);
+}`;
+
+/** Adds a precomputed delta into the scene (used for the SSR resolve). */
+export const addFS = H + `
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform float uScale;
+out vec4 oCol;
+void main(){ oCol = vec4(texture(uTex, vUV).rgb * uScale, 1.0); }`;
 
 /* ----------------------------------------------------------------- bloom */
 // Pyramidal down/upsample (Jimenez, CoD:AW): 13-tap box-ish downsample with a

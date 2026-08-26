@@ -224,6 +224,18 @@ shadow (2 cascades) → G-buffer (+decals) → depth blit → SSAO + bilateral b
 * **Bloom** — the pyramidal down/upsample from the Call of Duty: Advanced
   Warfare talk: Karis-weighted prefilter, 13-tap downsample, 3×3 tent upsample,
   blended progressively so the pyramid stays energy-neutral.
+* **Screen-space reflections** — the depth buffer is ray-marched with a binary
+  refine, at half resolution. It returns a *delta* against the analytic sky
+  reflection the deferred resolve already applied, so it can be added straight
+  into the scene without double-counting the specular term. Faded at the screen
+  edge, by roughness, and at grazing angles, where screen-space data is least
+  trustworthy.
+* **Surface wetness** — water pools on upward-facing surfaces via world-space
+  noise, darkening what it soaks into and leaving a near-mirror film on top.
+  Each map authors its own amount (Blacksite is soaked, Dustbowl is bone dry)
+  and each material its own porosity. This is what gives the reflections
+  something to work with: every procedural material is otherwise too rough to
+  reflect anything.
 * **Cloud shadows** — drifting cover projected onto the world from a baked
   tileable noise map. Two texture fetches rather than ten octaves of FBM per
   pixel, which at 2.7 megapixels is the difference between free and expensive.
