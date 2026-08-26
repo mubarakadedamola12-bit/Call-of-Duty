@@ -5,9 +5,26 @@ import { M4, m4 } from '../core/math.js';
 
 /* ------------------------------------------------------------- primitives */
 
-export function boxGeo(w = 1, h = 1, d = 1) {
+/**
+ * Global chamfer applied to every box, in metres. Real objects do not have
+ * mathematically perfect 90-degree edges — they have a small chamfer that
+ * catches a highlight, and its absence is one of the strongest "this is CG"
+ * tells there is. Set to 0 to get the old sharp boxes back.
+ */
+let BEVEL = 0.018;
+export function setBevel(m) { BEVEL = Math.max(0, m); }
+export function getBevel() { return BEVEL; }
+
+export function boxGeo(w = 1, h = 1, d = 1, bevel) {
   const x = w / 2, y = h / 2, z = d / 2;
+  // Never let the chamfer eat more than a third of the smallest dimension.
+  const b = Math.min(bevel === undefined ? BEVEL : bevel, Math.min(x, y, z) * 0.33);
   const pos = [], nrm = [], uv = [], idx = [];
+
+  const push = (px, py, pz, nx, ny, nz, tu, tv) => {
+    pos.push(px, py, pz); nrm.push(nx, ny, nz); uv.push(tu, tv);
+  };
+
   // face: normal, u-axis, v-axis, extent-u, extent-v, offset along normal
   const faces = [
     [[0, 0, 1], [1, 0, 0], [0, 1, 0], x, y, z],
@@ -19,16 +36,82 @@ export function boxGeo(w = 1, h = 1, d = 1) {
   ];
   for (const [n, U, V, eu, ev, off] of faces) {
     const base = pos.length / 3;
+    const iu = eu - b, iv = ev - b;
     for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-      pos.push(
-        n[0] * off + U[0] * eu * su + V[0] * ev * sv,
-        n[1] * off + U[1] * eu * su + V[1] * ev * sv,
-        n[2] * off + U[2] * eu * su + V[2] * ev * sv,
+      push(
+        n[0] * off + U[0] * iu * su + V[0] * iv * sv,
+        n[1] * off + U[1] * iu * su + V[1] * iv * sv,
+        n[2] * off + U[2] * iu * su + V[2] * iv * sv,
+        n[0], n[1], n[2],
+        // UVs stay in the box's own units so the inset does not shift tiling.
+        (su * iu + eu), (sv * iv + ev),
       );
-      nrm.push(n[0], n[1], n[2]);
-      uv.push((su * 0.5 + 0.5) * eu * 2, (sv * 0.5 + 0.5) * ev * 2);
     }
     idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  if (b <= 1e-6) return { pos, nrm, uv, idx };
+
+  const E = [x, y, z];
+  const at = (a, av, bAx, bv, cAx, cv) => {
+    const p = [0, 0, 0];
+    p[a] = av; p[bAx] = bv; p[cAx] = cv;
+    return p;
+  };
+
+  // ---- 12 edge chamfers: for each axis pair, a quad running along the third.
+  for (let a = 0; a < 3; a++) {              // axis the edge runs along
+    const b1 = (a + 1) % 3, b2 = (a + 2) % 3;
+    for (const s1 of [-1, 1]) {
+      for (const s2 of [-1, 1]) {
+        const base = pos.length / 3;
+        const nx = [0, 0, 0];
+        nx[b1] = s1; nx[b2] = s2;
+        const nl = Math.SQRT1_2;
+        const quad = [
+          at(a, -(E[a] - b), b1, E[b1] * s1, b2, (E[b2] - b) * s2),
+          at(a, (E[a] - b), b1, E[b1] * s1, b2, (E[b2] - b) * s2),
+          at(a, (E[a] - b), b1, (E[b1] - b) * s1, b2, E[b2] * s2),
+          at(a, -(E[a] - b), b1, (E[b1] - b) * s1, b2, E[b2] * s2),
+        ];
+        quad.forEach((p, i) => push(p[0], p[1], p[2],
+          nx[0] * nl, nx[1] * nl, nx[2] * nl,
+          p[a] + E[a], (i < 2 ? 0 : b) + E[b2]));
+        // Wind so the face points outward along the chamfer normal.
+        const e1 = [quad[1][0] - quad[0][0], quad[1][1] - quad[0][1], quad[1][2] - quad[0][2]];
+        const e2 = [quad[3][0] - quad[0][0], quad[3][1] - quad[0][1], quad[3][2] - quad[0][2]];
+        const cx = e1[1] * e2[2] - e1[2] * e2[1];
+        const cy = e1[2] * e2[0] - e1[0] * e2[2];
+        const cz = e1[0] * e2[1] - e1[1] * e2[0];
+        if (cx * nx[0] + cy * nx[1] + cz * nx[2] >= 0) {
+          idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        } else {
+          idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+        }
+      }
+    }
+  }
+
+  // ---- 8 corner patches
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const base = pos.length / 3;
+        const A = [sx * (x - b), sy * y, sz * (z - b)];
+        const B = [sx * (x - b), sy * (y - b), sz * z];
+        const C = [sx * x, sy * (y - b), sz * (z - b)];
+        const nl = 1 / Math.sqrt(3);
+        for (const p of [A, B, C]) {
+          push(p[0], p[1], p[2], sx * nl, sy * nl, sz * nl, p[0] + x, p[1] + y);
+        }
+        const e1 = [B[0] - A[0], B[1] - A[1], B[2] - A[2]];
+        const e2 = [C[0] - A[0], C[1] - A[1], C[2] - A[2]];
+        const cx = e1[1] * e2[2] - e1[2] * e2[1];
+        const cy = e1[2] * e2[0] - e1[0] * e2[2];
+        const cz = e1[0] * e2[1] - e1[1] * e2[0];
+        if (cx * sx + cy * sy + cz * sz >= 0) idx.push(base, base + 1, base + 2);
+        else idx.push(base, base + 2, base + 1);
+      }
+    }
   }
   return { pos, nrm, uv, idx };
 }

@@ -95,6 +95,16 @@ export class Program {
   tex(n, texture, target, unit) {
     const l = this.u[n];
     if (!l) return this;
+    if (!texture) {
+      // Binding null samples black, which usually looks like "the effect is
+      // subtle" rather than "the effect is missing". Say so once.
+      if (!this._warned) this._warned = new Set();
+      const key = 'tex:' + n;
+      if (!this._warned.has(key)) {
+        this._warned.add(key);
+        console.error(`[${this.label}] sampler ${n} bound to a missing texture`);
+      }
+    }
     const gl = this.gl;
     const u = unit === undefined ? this._unit++ : unit;
     gl.activeTexture(gl.TEXTURE0 + u);

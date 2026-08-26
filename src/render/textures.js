@@ -346,7 +346,92 @@ gens[MAT.PLAIN] = (o, u, v) => {
 
 /* --------------------------------------------------------------- baking */
 
-const SIZE = 512;
+// 512 is the sweet spot: with anisotropic filtering and a ~9 m tile that is
+// under 2 cm per texel, and doubling it quadrupled bake time for detail nobody
+// resolves at gameplay distance. Roughness variation, added below, buys far
+// more realism per millisecond than resolution does.
+let SIZE = 512;
+export function setMaterialResolution(px) { SIZE = Math.max(256, Math.min(2048, px | 0)); }
+
+/**
+ * Applied to every material after its own generator runs.
+ *
+ * Two things separate a procedural surface from a scanned one: real materials
+ * vary in *roughness* across broad areas (polish, wear, grime) and carry detail
+ * at several scales at once. Generators tend to produce a narrow roughness band
+ * and one dominant frequency, which is exactly what reads as CG — and it is
+ * also why screen-space reflections had nothing to bite on.
+ */
+/**
+ * Wear and grime are low-frequency by definition, so they are evaluated on a
+ * coarse grid once per layer and interpolated — per-pixel FBM for them cost
+ * more than every generator combined.
+ */
+const GRID = 64;
+const _wearG = new Float32Array(GRID * GRID);
+const _grimeG = new Float32Array(GRID * GRID);
+
+function buildRealismGrids() {
+  for (let j = 0; j < GRID; j++) {
+    for (let i = 0; i < GRID; i++) {
+      const u = (i / GRID) * TILE, v = (j / GRID) * TILE;
+      _wearG[j * GRID + i] = fbm(u * 0.9 + 41.3, v * 0.9 + 7.1, Math.round(TILE * 0.9), 3);
+      _grimeG[j * GRID + i] = fbm(u * 2.6 + 91.7, v * 2.6 + 3.3, Math.round(TILE * 2.6), 3);
+    }
+  }
+}
+
+function sampleGrid(g, u, v) {
+  const fx = (u / TILE) * GRID, fy = (v / TILE) * GRID;
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const tx = fx - x0, ty = fy - y0;
+  const i0 = ((x0 % GRID) + GRID) % GRID, j0 = ((y0 % GRID) + GRID) % GRID;
+  const i1 = (i0 + 1) % GRID, j1 = (j0 + 1) % GRID;
+  const a = g[j0 * GRID + i0], b = g[j0 * GRID + i1];
+  const c = g[j1 * GRID + i0], d = g[j1 * GRID + i1];
+  return mix(mix(a, b, tx), mix(c, d, tx), ty);
+}
+
+function realismPass(o, u, v, cfg) {
+  // Broad roughness variation: worn/polished patches metres across.
+  const wear = sampleGrid(_wearG, u, v);
+  const grime = sampleGrid(_grimeG, u, v);
+  const rv = cfg.roughVar === undefined ? 0.26 : cfg.roughVar;
+  o[3] = sat(o[3] * (1 + wear * rv * 2.0) - grime * rv * 0.5);
+
+  // Micro detail on top of whatever the generator produced — one octave, since
+  // this one genuinely has to be per-pixel.
+  const micro = pnoise(u * 34, v * 34, Math.round(TILE * 34));
+  o[5] += micro * (cfg.micro === undefined ? 0.20 : cfg.micro);
+
+  // Albedo breakup at a different scale from the roughness, so the two do not
+  // correlate — correlated colour and gloss is a strong synthetic tell.
+  const tone = 1 + grime * (cfg.tone === undefined ? 0.13 : cfg.tone)
+                 - wear * (cfg.tone === undefined ? 0.09 : cfg.tone * 0.7);
+  o[0] *= tone; o[1] *= tone; o[2] *= tone;
+
+  // Dirt settles into cavities, which also darkens the baked occlusion there.
+  o[6] = sat(o[6] * (1 - sat(grime) * 0.22));
+}
+
+/** Per-material tuning for the pass above. */
+const REALISM = {
+  0: { roughVar: 0.20, micro: 0.16, tone: 0.10 },   // sand
+  1: { roughVar: 0.34, micro: 0.22, tone: 0.16 },   // concrete
+  2: { roughVar: 0.40, micro: 0.18, tone: 0.14 },   // container
+  3: { roughVar: 0.36, micro: 0.16, tone: 0.13 },   // corrugated
+  4: { roughVar: 0.30, micro: 0.20, tone: 0.14 },   // wood
+  5: { roughVar: 0.44, micro: 0.12, tone: 0.10 },   // gunmetal
+  6: { roughVar: 0.30, micro: 0.16, tone: 0.09 },   // polymer
+  7: { roughVar: 0.18, micro: 0.22, tone: 0.13 },   // sandbag
+  8: { roughVar: 0.42, micro: 0.20, tone: 0.16 },   // rusted barrel
+  9: { roughVar: 0.38, micro: 0.24, tone: 0.15 },   // asphalt
+  10: { roughVar: 0.16, micro: 0.14, tone: 0.10 },  // fatigues
+  11: { roughVar: 0.30, micro: 0.22, tone: 0.15 },  // brick
+  12: { roughVar: 0.26, micro: 0.16, tone: 0.12 },  // tarp
+  13: { roughVar: 0.50, micro: 0.06, tone: 0.06 },  // dirty glass
+  14: { roughVar: 0.22, micro: 0.14, tone: 0.08 },  // plain
+};
 
 /** Linear -> sRGB. The albedo array is SRGB8_ALPHA8, so values must be encoded
  *  on the way in or the sampler's decode darkens everything a second time. */
@@ -366,6 +451,7 @@ function bakeLayer(gen, albedo, surf, layer, normalStrength) {
     for (let x = 0; x < N; x++) {
       const u = (x / N) * TILE;
       gen(px, u, v);
+      realismPass(px, u, v, REALISM[layer] || {});
       const i = y * N + x, o = base + i * 4;
       albedo[o] = toSRGB(px[0]) * 255;
       albedo[o + 1] = toSRGB(px[1]) * 255;
@@ -416,6 +502,7 @@ export async function buildMaterialArrays(gl, onProgress) {
   const N = SIZE;
   const albedo = new Uint8Array(N * N * 4 * MAT_COUNT);
   const surf = new Uint8Array(N * N * 4 * MAT_COUNT);
+  buildRealismGrids();
   for (let i = 0; i < MAT_COUNT; i++) {
     bakeLayer(gens[i], albedo, surf, i, NORMAL_STRENGTH[i]);
     if (onProgress) onProgress((i + 1) / MAT_COUNT);

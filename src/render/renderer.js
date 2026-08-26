@@ -7,7 +7,7 @@
 import { Program, RT, FullscreenTri, makeTex2D } from '../core/gl.js';
 import { M4, V3, m4, v3 } from '../core/math.js';
 import * as S from './shaders.js';
-import { buildMaterialArrays, makeNoiseTex, MAT } from './textures.js';
+import { buildMaterialArrays, makeNoiseTex, makeCloudTex, setMaterialResolution, MAT } from './textures.js';
 
 const MAX_PARTICLES = 3000;
 const MAX_BEAMS = 400;
@@ -137,11 +137,13 @@ export class Renderer {
     this._initBuffers();
   }
 
-  async loadMaterials(onProgress) {
+  async loadMaterials(onProgress, resolution) {
+    if (resolution) setMaterialResolution(resolution);
     const { albedo, surf } = await buildMaterialArrays(this.gl, onProgress);
     this.matAlbedo = albedo;
     this.matSurf = surf;
     this.noiseTex = makeNoiseTex(this.gl);
+    this.cloudTex = makeCloudTex(this.gl);
   }
 
   _initPrograms() {

@@ -9,6 +9,7 @@ import { HUD } from './game/hud.js';
 import { Game, DIFFICULTY } from './game/game.js';
 import { MAPS } from './game/world.js';
 import { HumanLibrary } from './game/humans.js';
+import { setBevel } from './render/geometry.js';
 import { WEAPONS } from './game/weapons.js';
 import { clamp } from './core/math.js';
 
@@ -138,13 +139,20 @@ async function boot() {
   await frame();
 
   setProgress(0.10, 'BAKING MATERIALS…');
-  await renderer.loadMaterials((p) => setProgress(0.10 + p * 0.62, 'BAKING MATERIALS… ' + (p * 100 | 0) + '%'));
+  await renderer.loadMaterials(
+    (p) => setProgress(0.10 + p * 0.62, 'BAKING MATERIALS… ' + (p * 100 | 0) + '%'),
+    IS_MOBILE ? 384 : 512,
+  );
 
   setProgress(0.74, 'LOADING CIVILIANS…');
   humans = new HumanLibrary();
   // Scenery, not gameplay: if the pack is missing the game still runs.
   await humans.load((p) => setProgress(0.74 + p * 0.12, `LOADING CIVILIANS… ${(p * 100) | 0}%`))
     .catch((e) => { console.warn('[humans] pack unavailable:', e.message); });
+
+  // Chamfered edges cost ~74% more triangles; worth it on desktop, not on a
+  // phone that cannot resolve a 2 cm highlight anyway.
+  setBevel(IS_MOBILE ? 0 : 0.018);
 
   setProgress(0.87, 'BUILDING BATTLEGROUND…');
   await frame();

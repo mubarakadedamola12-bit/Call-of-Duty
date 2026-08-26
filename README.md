@@ -236,6 +236,16 @@ shadow (2 cascades) → G-buffer (+decals) → depth blit → SSAO + bilateral b
   and each material its own porosity. This is what gives the reflections
   something to work with: every procedural material is otherwise too rough to
   reflect anything.
+* **Chamfered edges** — every box carries an 18 mm bevel. Real objects do not
+  have mathematically perfect 90° edges; they have a chamfer that catches a
+  highlight, and its absence is one of the strongest "this is CG" tells there
+  is. Costs ~74% more triangles (42k → 73k on Scrapyard); off on mobile.
+* **Material realism pass** — applied over every generator. Real surfaces vary
+  in *roughness* across broad areas (polish, wear, grime) and carry detail at
+  several scales at once; procedural generators tend to produce one dominant
+  frequency and a narrow roughness band, which is exactly what reads as
+  synthetic. Colour breakup runs at a different scale from the roughness so the
+  two do not correlate — correlated colour and gloss is itself a tell.
 * **Cloud shadows** — drifting cover projected onto the world from a baked
   tileable noise map. Two texture fetches rather than ten octaves of FBM per
   pixel, which at 2.7 megapixels is the difference between free and expensive.
