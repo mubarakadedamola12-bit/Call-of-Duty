@@ -7,6 +7,7 @@ import { Builder, boxGeo, cylinderGeo, sphereGeo, planeGeo } from '../render/geo
 import { MAT } from '../render/textures.js';
 import { defaultMaterial } from '../render/renderer.js';
 import { humanMaterial, tintFor } from './humans.js';
+import { scanUV } from '../render/scans.js';
 import { M4, m4, mulberry32, clamp } from '../core/math.js';
 
 const R = mulberry32(20260823);
@@ -161,19 +162,29 @@ export class World {
 
   /* --------------------------------------------------------- materials */
 
+  /** uvScale for a slot: the scan's physical tile size if it has one. */
+  static uv(layer, fallback) {
+    const s = scanUV(layer);
+    return s ? [s, s] : [fallback, fallback];
+  }
+
   static M = {
-    sand: { key: 'sand', layer: MAT.SAND, uvScale: [0.11, 0.11], macro: 0.85, rough: 1, metal: 1, normalScale: 1.15, wet: 0.35, porosity: 1.15 },
-    asphalt: { key: 'asphalt', layer: MAT.ASPHALT, uvScale: [0.16, 0.16], macro: 0.65, normalScale: 1.1, wet: 1.25, porosity: 0.85 },
-    concrete: { key: 'concrete', layer: MAT.CONCRETE, uvScale: [0.34, 0.34], macro: 0.34, normalScale: 1.0 },
-    concreteDark: { key: 'concreteDark', layer: MAT.CONCRETE, uvScale: [0.30, 0.30], tint: [0.62, 0.63, 0.66], macro: 0.30 },
+    sand: { key: 'sand', layer: MAT.SAND, uvScale: World.uv(MAT.SAND, 0.11), tint: [0.60, 0.60, 0.62], macro: 0.85, rough: 1, metal: 1, normalScale: 1.15, wet: 0.35, porosity: 1.15 },
+    asphalt: { key: 'asphalt', layer: MAT.ASPHALT, uvScale: World.uv(MAT.ASPHALT, 0.16), macro: 0.65, normalScale: 1.1, wet: 1.25, porosity: 0.85 },
+    concrete: { key: 'concrete', layer: MAT.CONCRETE, uvScale: World.uv(MAT.CONCRETE, 0.34), macro: 0.34, normalScale: 1.0 },
+    concreteDark: { key: 'concreteDark', layer: MAT.CONCRETE, uvScale: World.uv(MAT.CONCRETE, 0.30), tint: [0.62, 0.63, 0.66], macro: 0.30 },
     backdrop: { key: 'backdrop', layer: MAT.CONCRETE, uvScale: [0.10, 0.10], tint: [1.25, 1.12, 1.00], macro: 0.45, rough: 1.1, metal: 0 },
-    steel: { key: 'steel', layer: MAT.CORRUGATED, uvScale: [0.30, 0.30], tint: [0.85, 0.86, 0.90], normalScale: 1.0 },
-    corrugated: { key: 'corrugated', layer: MAT.CORRUGATED, uvScale: [0.22, 0.22], tint: [0.62, 0.60, 0.58], normalScale: 1.15, macro: 0.30 },
-    steelDark: { key: 'steelDark', layer: MAT.GUNMETAL, uvScale: [0.55, 0.55], tint: [0.85, 0.87, 0.95] },
-    wood: { key: 'wood', layer: MAT.WOOD, uvScale: [0.42, 0.42], macro: 0.25 },
-    sandbag: { key: 'sandbag', layer: MAT.SANDBAG, uvScale: [0.75, 0.75], macro: 0.30, wet: 0.4, porosity: 1.3 },
-    barrel: { key: 'barrel', layer: MAT.RUSTBARREL, uvScale: [0.55, 0.55] },
-    brick: { key: 'brick', layer: MAT.BRICK, uvScale: [0.26, 0.26], macro: 0.28 },
+    steel: { key: 'steel', layer: MAT.CORRUGATED, uvScale: World.uv(MAT.CORRUGATED, 0.30), tint: [0.78, 0.80, 0.84], rough: 1.45, normalScale: 0.7 },
+    corrugated: { key: 'corrugated', layer: MAT.CORRUGATED, uvScale: World.uv(MAT.CORRUGATED, 0.22), tint: [0.66, 0.62, 0.56], rough: 1.5, normalScale: 0.75, macro: 0.30 },
+    steelDark: { key: 'steelDark', layer: MAT.GUNMETAL, uvScale: World.uv(MAT.GUNMETAL, 0.55), tint: [2.20, 2.26, 2.42] },
+    wood: { key: 'wood', layer: MAT.WOOD, uvScale: World.uv(MAT.WOOD, 0.42), macro: 0.25 },
+    sandbag: { key: 'sandbag', layer: MAT.SANDBAG, uvScale: World.uv(MAT.SANDBAG, 0.75), macro: 0.30, wet: 0.4, porosity: 1.3 },
+    barrel: { key: 'barrel', layer: MAT.RUSTBARREL, uvScale: World.uv(MAT.RUSTBARREL, 0.55) },
+    brick: { key: 'brick', layer: MAT.BRICK, uvScale: World.uv(MAT.BRICK, 0.26), macro: 0.28 },
+    // Sun-dried mud brick: what a desert village is actually built from. Fired
+    // red brick reads as a suburb once a whole map is made of it.
+    mudbrick: { key: 'mudbrick', layer: MAT.MUDBRICK, uvScale: World.uv(MAT.MUDBRICK, 0.26), macro: 0.30, porosity: 1.2 },
+    mudbrickPale: { key: 'mudbrickPale', layer: MAT.MUDBRICK, uvScale: World.uv(MAT.MUDBRICK, 0.24), tint: [1.12, 1.10, 1.02], macro: 0.30, porosity: 1.2 },
     tarp: { key: 'tarp', layer: MAT.TARP, uvScale: [0.45, 0.45] },
     stain: { key: 'stain', layer: MAT.ASPHALT, uvScale: [0.55, 0.55], tint: [0.30, 0.28, 0.26], rough: 0.55, macro: 0.5 },
     sandPatch: { key: 'sandPatch', layer: MAT.SAND, uvScale: [0.22, 0.22], tint: [0.78, 0.74, 0.70], macro: 0.9 },
@@ -181,7 +192,10 @@ export class World {
   };
 
   static container(tint, key) {
-    return { key, layer: MAT.CONTAINER, uvScale: [0.165, 0.30], tint, normalScale: 1.15, macro: 0.18 };
+    return {
+      key, layer: MAT.CONTAINER, uvScale: World.uv(MAT.CONTAINER, 0.165),
+      tint, rough: 1.5, normalScale: 0.75, macro: 0.18,
+    };
   }
 
   /* -------------------------------------------------------------- props */
@@ -395,7 +409,9 @@ export class World {
     // Flat roof, where the shell is still intact. Adobe roofs are flat, and it
     // gives the rooftop figures something to actually stand on.
     if (roof) {
-      this.box(mat === World.M.brick ? World.M.concreteDark : m, w - 0.2, 0.35, d - 0.2,
+      const roofMat = (m.layer === MAT.BRICK || m.layer === MAT.MUDBRICK)
+        ? World.M.concreteDark : m;
+      this.box(roofMat, w - 0.2, 0.35, d - 0.2,
         x, h - 0.175, z, ry, 1);
       // Low parapet around the edge.
       for (const [ox, oz, pw, pd] of [
@@ -533,11 +549,11 @@ export class World {
   buildScrapyard() {
     const M = World.M;
     const CON = {
-      red: World.container([1.0, 0.95, 0.92], 'conRed'),
-      blue: World.container([0.42, 0.72, 1.15], 'conBlue'),
-      green: World.container([0.52, 1.05, 0.62], 'conGreen'),
-      tan: World.container([1.35, 1.15, 0.78], 'conTan'),
-      grey: World.container([0.72, 0.76, 0.82], 'conGrey'),
+      red: World.container([1.05, 0.30, 0.22], 'conRed'),
+      blue: World.container([0.28, 0.55, 1.05], 'conBlue'),
+      green: World.container([0.30, 0.72, 0.38], 'conGreen'),
+      tan: World.container([1.15, 0.95, 0.62], 'conTan'),
+      grey: World.container([0.85, 0.88, 0.93], 'conGrey'),
     };
     const CONS = [CON.red, CON.blue, CON.green, CON.tan, CON.grey];
 
@@ -948,7 +964,7 @@ export class World {
         const t = (i - (segs - 1) / 2) * 3.6;
         const c = Math.cos(ry), sn = Math.sin(ry);
         const h = 2.6 + (i % 3) * 0.3;
-        this.box(M.brick, 3.55, h, 0.5, ax + c * t, h / 2, az + sn * t, ry, 1);
+        this.box(i % 3 === 1 ? M.mudbrickPale : M.mudbrick, 3.55, h, 0.5, ax + c * t, h / 2, az + sn * t, ry, 1);
       }
     }
 
@@ -966,7 +982,7 @@ export class World {
     // bombed open, which also varies the skyline.
     const roofed = new Set(['-19,-18', '20,-17', '-19,13', '21,15', '-3,25', '4,-27', '-21,-3', '21,-2']);
     for (const [x, z, w, d, h, ry, door] of houses) {
-      this.addRuin(x, z, w, d, h, ry, M.brick, door, roofed.has(`${x},${z}`));
+      this.addRuin(x, z, w, d, h, ry, (x + z) % 2 === 0 ? M.mudbrick : M.mudbrickPale, door, roofed.has(`${x},${z}`));
     }
 
     // Central plaza: a well, stalls and sandbag positions.
@@ -989,7 +1005,7 @@ export class World {
     for (let i = 0; i < 120; i++) {
       const x = rnd(-30, 30), z = rnd(-30, 30);
       const sz = rnd(0.18, 0.6);
-      this.deco(M.brick, boxGeo(sz, sz * rnd(0.4, 0.9), sz * rnd(0.7, 1.3)),
+      this.deco(R() < 0.5 ? M.mudbrick : M.mudbrickPale, boxGeo(sz, sz * rnd(0.4, 0.9), sz * rnd(0.7, 1.3)),
         x, sz * 0.2, z, rnd(0, 3.1), rnd(0, 6.28), rnd(0, 3.1));
     }
     for (let i = 0; i < 26; i++) {

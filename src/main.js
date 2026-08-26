@@ -140,7 +140,7 @@ async function boot() {
 
   setProgress(0.10, 'BAKING MATERIALS…');
   await renderer.loadMaterials(
-    (p) => setProgress(0.10 + p * 0.62, 'BAKING MATERIALS… ' + (p * 100 | 0) + '%'),
+    (p) => setProgress(0.10 + p * 0.62, 'BUILDING MATERIALS… ' + (p * 100 | 0) + '%'),
     IS_MOBILE ? 384 : 512,
   );
 

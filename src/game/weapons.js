@@ -12,10 +12,10 @@ import { M4, m4 } from '../core/math.js';
 const _x = m4();
 
 const M = {
-  metal: { layer: MAT.GUNMETAL, uvScale: [3.2, 3.2], tint: [1, 1, 1], rough: 1.0, metal: 1, normalScale: 0.9 },
-  metalDark: { layer: MAT.GUNMETAL, uvScale: [4.0, 4.0], tint: [0.62, 0.64, 0.70], rough: 0.85, metal: 1 },
-  poly: { layer: MAT.POLYMER, uvScale: [5.0, 5.0], tint: [1, 1, 1], rough: 1, metal: 1, normalScale: 1.0 },
-  polyTan: { layer: MAT.POLYMER, uvScale: [5.0, 5.0], tint: [3.4, 2.7, 1.75], rough: 1.0, metal: 1 },
+  metal: { layer: MAT.GUNMETAL, uvScale: [9, 9], tint: [1.05, 1.06, 1.10], rough: 1.15, metal: 1, normalScale: 0.55 },
+  metalDark: { layer: MAT.GUNMETAL, uvScale: [11, 11], tint: [0.70, 0.72, 0.78], rough: 1.0, metal: 1, normalScale: 0.5 },
+  poly: { layer: MAT.POLYMER, uvScale: [10, 10], tint: [1.15, 1.15, 1.18], rough: 1.2, metal: 1, normalScale: 0.7 },
+  polyTan: { layer: MAT.POLYMER, uvScale: [10, 10], tint: [3.4, 2.7, 1.75], rough: 1.2, metal: 1, normalScale: 0.7 },
   wood: { layer: MAT.WOOD, uvScale: [1.6, 1.6], tint: [0.85, 0.78, 0.70], rough: 0.85, metal: 1 },
   glow: { layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.2, 0.2, 0.2], emissive: [7.0, 0.6, 0.35], rough: 1, metal: 0 },
   glowGreen: { layer: MAT.GUNMETAL, uvScale: [1, 1], tint: [0.2, 0.2, 0.2], emissive: [0.6, 6.0, 1.4], rough: 1, metal: 0 },

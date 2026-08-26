@@ -102,9 +102,9 @@ const TILE = 8; // noise period — must divide evenly for seamlessness
 export const MAT = {
   SAND: 0, CONCRETE: 1, CONTAINER: 2, CORRUGATED: 3, WOOD: 4, GUNMETAL: 5,
   POLYMER: 6, SANDBAG: 7, RUSTBARREL: 8, ASPHALT: 9, FATIGUES: 10, BRICK: 11,
-  TARP: 12, GLASSDIRT: 13, PLAIN: 14,
+  TARP: 12, GLASSDIRT: 13, PLAIN: 14, MUDBRICK: 15,
 };
-export const MAT_COUNT = 15;
+export const MAT_COUNT = 16;
 
 const gens = new Array(MAT_COUNT);
 
@@ -331,6 +331,8 @@ gens[MAT.GLASSDIRT] = (o, u, v) => {
  */
 export const PLAIN_ALBEDO = 0.72;
 
+gens[MAT.MUDBRICK] = (o, u, v) => gens[MAT.BRICK](o, u, v);
+
 gens[MAT.PLAIN] = (o, u, v) => {
   const weave = (Math.sin(u * Math.PI * 2 * 30) * 0.5 + 0.5) * 0.5
               + (Math.sin(v * Math.PI * 2 * 30) * 0.5 + 0.5) * 0.5;
@@ -431,6 +433,7 @@ const REALISM = {
   12: { roughVar: 0.26, micro: 0.16, tone: 0.12 },  // tarp
   13: { roughVar: 0.50, micro: 0.06, tone: 0.06 },  // dirty glass
   14: { roughVar: 0.22, micro: 0.14, tone: 0.08 },  // plain
+  15: { roughVar: 0.30, micro: 0.22, tone: 0.15 },  // sun-dried mud brick
 };
 
 /** Linear -> sRGB. The albedo array is SRGB8_ALPHA8, so values must be encoded
@@ -490,23 +493,30 @@ function bakeLayer(gen, albedo, surf, layer, normalStrength) {
 // Sobel gain per material. Kept modest: an over-strong normal map turns into
 // specular sparkle once the surface is in motion.
 export const NORMAL_STRENGTH = [
-  //sand con  cont corr wood gun  poly bag  barr asph fat  brick tarp glass plain
-  2.20, 1.90, 1.60, 1.70, 1.80, 0.90, 1.40, 2.60, 2.00, 1.80, 1.10, 2.30, 1.60, 0.60, 0.85,
+  //sand con  cont corr wood gun  poly bag  barr asph fat  brick tarp glass plain mud
+  2.20, 1.90, 1.60, 1.70, 1.80, 0.90, 1.40, 2.60, 2.00, 1.80, 1.10, 2.30, 1.60, 0.60, 0.85, 2.30,
 ];
 
 /**
  * Bakes every material. Yields between layers so a loading bar can animate.
  * @returns {{albedo: WebGLTexture, surf: WebGLTexture}}
  */
-export async function buildMaterialArrays(gl, onProgress) {
+export async function buildMaterialArrays(gl, onProgress, scanLoader) {
   const N = SIZE;
   const albedo = new Uint8Array(N * N * 4 * MAT_COUNT);
   const surf = new Uint8Array(N * N * 4 * MAT_COUNT);
   buildRealismGrids();
+  // Procedural layers are baked first and act as the fallback: any scan that
+  // fails to load simply leaves the generated version in place.
+  const procShare = scanLoader ? 0.55 : 1;
   for (let i = 0; i < MAT_COUNT; i++) {
     bakeLayer(gens[i], albedo, surf, i, NORMAL_STRENGTH[i]);
-    if (onProgress) onProgress((i + 1) / MAT_COUNT);
+    if (onProgress) onProgress(((i + 1) / MAT_COUNT) * procShare);
     await new Promise((r) => setTimeout(r, 0));
+  }
+  if (scanLoader) {
+    await scanLoader(albedo, surf, N,
+      (p) => { if (onProgress) onProgress(procShare + p * (1 - procShare)); });
   }
   const mk = (data, srgb) => {
     const t = gl.createTexture();

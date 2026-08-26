@@ -86,8 +86,8 @@ export class Game {
     // One skinned rig per team: the mesh is baked with the team's fatigue
     // colour, and each carries its own skeleton and reusable pose buffer.
     this.soldiers = [
-      { mesh: buildSoldier(gl, [0.62, 0.80, 1.30]), skeleton: makeSkeleton(), pose: makePose() },
-      { mesh: buildSoldier(gl, [1.34, 0.92, 0.66]), skeleton: makeSkeleton(), pose: makePose() },
+      { mesh: buildSoldier(gl, [0.50, 0.58, 0.76]), skeleton: makeSkeleton(), pose: makePose() },
+      { mesh: buildSoldier(gl, [0.94, 0.76, 0.50]), skeleton: makeSkeleton(), pose: makePose() },
     ];
     this.vm = new Viewmodel(buildHands(gl));
     this.nav = new NavAgent(this.world);
